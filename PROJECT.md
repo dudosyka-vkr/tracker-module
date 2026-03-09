@@ -466,12 +466,31 @@ def main():
 
 ---
 
+## Настройка окружения
+
+Команда `make setup` выполняет полную настройку с нуля:
+
+```bash
+make setup
+```
+
+Шаги:
+1. **Установка Python 3.12** — через `brew install python@3.12` (macOS) или `winget install Python.Python.3.12` (Windows)
+2. **Настройка Poetry** — `poetry env use <path-to-python3.12>`
+3. **Установка зависимостей** — `poetry lock && poetry install`
+
+Требования: Homebrew (macOS) или winget (Windows), Poetry.
+
+Если Python 3.12 уже установлен, достаточно `make install`.
+
+---
+
 ## Сборка в нативное приложение
 
 Приложение собирается через PyInstaller в нативный исполняемый файл. Конфигурация сборки — `eyetracker.spec`.
 
 ```bash
-make install   # установка зависимостей (включая pyinstaller)
+make setup     # первоначальная настройка (или make install если Python уже есть)
 make build     # сборка
 ```
 

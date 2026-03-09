@@ -88,17 +88,23 @@ poetry run eyetracker --help
 
 ## Разработка
 
-### Установка
+### Первоначальная настройка
+
+```bash
+make setup
+```
+
+Команда автоматически:
+1. Устанавливает Python 3.12 (`brew install python@3.12` на macOS, `winget install` на Windows)
+2. Настраивает Poetry-окружение на Python 3.12 (`poetry env use`)
+3. Устанавливает все зависимости (`poetry lock && poetry install`)
+
+Требования: [Homebrew](https://brew.sh) на macOS или [winget](https://learn.microsoft.com/windows/package-manager/winget/) на Windows, а также [Poetry](https://python-poetry.org/docs/#installation).
+
+### Установка зависимостей (если Python уже настроен)
 
 ```bash
 make install
-```
-
-Или вручную:
-
-```bash
-poetry lock
-poetry install
 ```
 
 ### Тестирование
@@ -113,7 +119,8 @@ make test-verbose   # или poetry run pytest -v
 ### Все команды Makefile
 
 ```bash
-make install        # Установка зависимостей
+make setup          # Установка Python 3.12 + Poetry env + зависимости
+make install        # Установка зависимостей (Python уже настроен)
 make run            # Запуск из исходников
 make test           # Запуск тестов
 make test-verbose   # Запуск тестов с подробным выводом
