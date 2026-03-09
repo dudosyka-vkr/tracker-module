@@ -7,7 +7,7 @@ readme = "README.md"
 packages = [{include = "eyetracker"}]
 
 [tool.poetry.dependencies]
-python = "^3.11"
+python = ">=3.12,<3.14"
 numpy = "^1.24"
 opencv-python = "^4.8"
 mediapipe = "^0.10"
@@ -15,6 +15,7 @@ PyQt6 = "^6.6"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.4"
+pyinstaller = "^6.0"
 
 [tool.poetry.scripts]
 eyetracker = "eyetracker.main:main"

@@ -9,6 +9,8 @@ from __future__ import annotations
 import logging
 import math
 import os
+import platform
+import sys
 import time
 import threading
 import urllib.request
@@ -44,7 +46,8 @@ _MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/"
     "face_landmarker/face_landmarker/float16/latest/face_landmarker.task"
 )
-_MODEL_DIR = os.path.join(os.path.dirname(__file__), "models")
+_BASE_DIR = getattr(sys, "_MEIPASS", os.path.dirname(__file__))
+_MODEL_DIR = os.path.join(_BASE_DIR, "eyetracker", "models") if hasattr(sys, "_MEIPASS") else os.path.join(os.path.dirname(__file__), "models")
 _MODEL_PATH = os.path.join(_MODEL_DIR, "face_landmarker.task")
 
 
@@ -451,13 +454,21 @@ class EyeTracker:
 
     def begin(self, camera_index: int = 0) -> "EyeTracker":
         """Start webcam capture and the prediction loop."""
-        self._cap = cv2.VideoCapture(camera_index)
+        if platform.system() == "Darwin":
+            self._cap = cv2.VideoCapture(camera_index, cv2.CAP_AVFOUNDATION)
+        else:
+            self._cap = cv2.VideoCapture(camera_index)
+
         if not self._cap.isOpened():
             logger.error("Could not open webcam at index %d", camera_index)
             return self
 
         self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.params.video_width)
         self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.params.video_height)
+
+        # Warmup: let the camera initialize and deliver first frames
+        for _ in range(5):
+            self._cap.read()
 
         self._paused = False
         self._running = True
