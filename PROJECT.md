@@ -11,8 +11,11 @@ eyetracker/
 ├── eyetracker/
 │   ├── __init__.py                        # Версия пакета
 │   ├── main.py                            # CLI точка входа (argparse)
+│   ├── app.py                             # App — QMainWindow + QStackedWidget, навигация между экранами
+│   ├── home.py                            # HomeScreen — начальный экран (sidebar + контент)
+│   ├── theme.py                           # Константы стиля macOS (цвета, шрифты, размеры)
 │   ├── pipeline.py                        # Трекер, детекция моргания, регрессия, оркестратор
-│   ├── calibration.py                     # UI калибровки (PyQt6) + измерение точности
+│   ├── calibration.py                     # CalibrationScreen (PyQt6 QPainter) + измерение точности
 │   ├── util.py                            # Eye, DataWindow, KalmanFilter, обработка изображений
 │   └── models/                            # Автоматически скачиваемая модель (face_landmarker.task)
 └── tests/
@@ -339,9 +342,26 @@ def calculate_precision(self, target_x: float, target_y: float) -> float:
 
 ---
 
+## Навигация между экранами — `app.py`
+
+Приложение использует `QStackedWidget` для переключения между экранами:
+
+- **HomeScreen** (`home.py`) — начальный экран с sidebar (macOS-стиль) и кнопкой "Начать калибровку"
+- **CalibrationScreen** (`calibration.py`) — полноэкранная калибровка с QPainter
+
+Навигация через коллбеки:
+- `HomeScreen.on_start_calibration` → `App._go_to_calibration()` — создаёт новый `EyeTracker` + `CalibrationScreen`
+- `CalibrationScreen.on_back` → `App._go_to_home()` — останавливает и уничтожает `CalibrationScreen`
+
+При каждом входе в калибровку создаётся **новый** `EyeTracker` и `CalibrationScreen` — полностью чистое состояние. При возврате на home экран калибровки уничтожается (`deleteLater()`), освобождая камеру и память.
+
+### Тема оформления — `theme.py`
+
+Централизованные константы стиля macOS (тёмная тема): цвета фона, текста, кнопок, размеры sidebar, шрифты.
+
 ## UI калибровки — `calibration.py`
 
-Построен на PyQt6. Состоит из кастомного виджета `_CalibrationWidget` (обрабатывает отрисовку, клики и клавиатуру) и класса `CalibrationApp` (управляет состоянием).
+Построен на PyQt6. `CalibrationScreen(QWidget)` — единый виджет с `paintEvent` для отрисовки через QPainter, `start()`/`stop()` для управления жизненным циклом.
 
 ### Фазы работы
 
@@ -453,16 +473,17 @@ make test-verbose  # или poetry run pytest -v
 ```python
 # main.py:9-25
 def main():
-    parser = argparse.ArgumentParser(description="Eye tracking via webcam")
+    parser = argparse.ArgumentParser(description="Отслеживание взгляда через веб-камеру")
     parser.add_argument("--camera", type=int, default=0)
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args()
     ...
-    app = CalibrationApp(EyeTracker())
+    from eyetracker.app import App
+    app = App()
     app.run()
 ```
 
-Сглаживание Калмана, детекция моргания и взвешенная гребневая регрессия включены по умолчанию.
+Приложение запускается на Home-экране. Калибровка начинается по клику на кнопку или пункт sidebar.
 
 ---
 

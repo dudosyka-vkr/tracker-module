@@ -17,10 +17,9 @@ def main():
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
-    from eyetracker.pipeline import EyeTracker
-    from eyetracker.calibration import CalibrationApp
+    from eyetracker.app import App
 
-    app = CalibrationApp(EyeTracker())
+    app = App()
     app.run()
 
 

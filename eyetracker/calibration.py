@@ -1,6 +1,6 @@
 """Calibration UI and precision measurement.
 
-Provides a fullscreen PyQt6 overlay with 9 calibration points.
+Provides a fullscreen PyQt6 widget with 9 calibration points.
 The user clicks each point 5 times while looking at it.
 After calibration, accuracy is measured and gaze tracking begins.
 """
@@ -8,15 +8,15 @@ After calibration, accuracy is measured and gaze tracking begins.
 from __future__ import annotations
 
 import math
-import sys
 import time
 import threading
+from typing import Callable
 
 import cv2
 import numpy as np
 from PyQt6.QtCore import Qt, QTimer, QRectF, QPointF
 from PyQt6.QtGui import QColor, QFont, QPainter, QImage, QKeyEvent, QMouseEvent
-from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget
+from PyQt6.QtWidgets import QWidget
 
 from eyetracker.pipeline import EyeTracker
 
@@ -78,31 +78,8 @@ CLICKS_PER_POINT = 5
 NUM_POINTS = 9
 
 
-class _CalibrationWidget(QWidget):
-    """Custom widget that handles all painting and input for calibration."""
-
-    def __init__(self, app: CalibrationApp, parent: QWidget | None = None):
-        super().__init__(parent)
-        self.app = app
-        self.setMouseTracking(True)
-
-    def paintEvent(self, event):  # noqa: N802
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        self.app._paint(painter)
-        painter.end()
-
-    def mousePressEvent(self, event: QMouseEvent):  # noqa: N802
-        if event.button() == Qt.MouseButton.LeftButton:
-            pos = event.position()
-            self.app._on_click(int(pos.x()), int(pos.y()))
-
-    def keyPressEvent(self, event: QKeyEvent):  # noqa: N802
-        self.app._on_key(event)
-
-
-class CalibrationApp:
-    """Fullscreen calibration window for the eye tracker."""
+class CalibrationScreen(QWidget):
+    """Fullscreen calibration widget with QPainter rendering."""
 
     # Phases
     PHASE_INSTRUCTIONS = "instructions"
@@ -110,24 +87,14 @@ class CalibrationApp:
     PHASE_MEASUREMENT = "measurement"
     PHASE_GAZE = "gaze"
 
-    def __init__(self, tracker: EyeTracker | None = None):
-        self.wg = tracker or EyeTracker()
+    def __init__(self, tracker: EyeTracker, on_back: Callable[[], None]):
+        super().__init__()
+        self.wg = tracker
+        self._on_back = on_back
         self.precision = PrecisionCalculator()
 
-        self._qt_app = QApplication.instance() or QApplication(sys.argv)
-
-        self._window = QMainWindow()
-        self._window.setWindowTitle("Калибровка трекера взгляда")
-
-        self._widget = _CalibrationWidget(self)
-        self._window.setCentralWidget(self._widget)
-        self._widget.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-
-        # Screen dimensions (will be set after showFullScreen)
-        screen = self._qt_app.primaryScreen().geometry()
-        self.screen_width = screen.width()
-        self.screen_height = screen.height()
-        self.wg.set_screen_size(self.screen_width, self.screen_height)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setMouseTracking(True)
 
         # Phase
         self._phase = self.PHASE_INSTRUCTIONS
@@ -158,32 +125,56 @@ class CalibrationApp:
 
         # Dynamic train mode
         self._train_mode = False
-        self._feedback_markers: list[tuple[float, float, float]] = []  # (x, y, timestamp)
+        self._feedback_markers: list[tuple[float, float, float]] = []
 
         # Repaint timer
         self._timer = QTimer()
-        self._timer.timeout.connect(self._widget.update)
-        self._timer.start(33)  # ~30 fps
+        self._timer.timeout.connect(self.update)
 
-    def run(self):
-        """Start the eye tracker and show calibration UI."""
+    # ---- Lifecycle -----------------------------------------------------------
+
+    def start(self):
+        """Called when navigating to this screen."""
+        self.wg.set_screen_size(self.width(), self.height())
         self.wg.begin()
         self.wg.set_gaze_listener(self._on_gaze)
-
         self._start_video_preview()
         self._phase = self.PHASE_INSTRUCTIONS
+        self._timer.start(33)
+        self.setFocus()
 
-        self._window.showFullScreen()
-        self._widget.setFocus()
-        self._qt_app.exec()
+    def stop(self):
+        """Called when leaving this screen."""
+        self._video_running = False
+        self._timer.stop()
+        self.wg.end()
+
+    def resizeEvent(self, event):  # noqa: N802
+        super().resizeEvent(event)
+        self.wg.set_screen_size(self.width(), self.height())
+
+    # ---- Qt event overrides --------------------------------------------------
+
+    def paintEvent(self, event):  # noqa: N802
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        self._paint(painter)
+        painter.end()
+
+    def mousePressEvent(self, event: QMouseEvent):  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            pos = event.position()
+            self._on_click(int(pos.x()), int(pos.y()))
+
+    def keyPressEvent(self, event: QKeyEvent):  # noqa: N802
+        self._on_key(event)
 
     # ---- Painting -----------------------------------------------------------
 
     def _paint(self, p: QPainter):
-        # Background
-        p.fillRect(0, 0, self.screen_width, self.screen_height, QColor("black"))
+        w, h = self.width(), self.height()
+        p.fillRect(0, 0, w, h, QColor("black"))
 
-        # Video preview (top-left)
         if self._show_video and self._video_image is not None:
             p.drawImage(10, 10, self._video_image)
 
@@ -197,15 +188,16 @@ class CalibrationApp:
             self._paint_gaze(p)
 
     def _paint_instructions(self, p: QPainter):
-        cx, cy = self.screen_width // 2, self.screen_height // 2
+        w, h = self.width(), self.height()
+        cx, cy = w // 2, h // 2
 
         p.setPen(QColor("white"))
         p.setFont(QFont("Helvetica", 32, QFont.Weight.Bold))
-        p.drawText(QRectF(0, cy - 80, self.screen_width, 60), Qt.AlignmentFlag.AlignCenter, "КАЛИБРОВКА")
+        p.drawText(QRectF(0, cy - 80, w, 60), Qt.AlignmentFlag.AlignCenter, "КАЛИБРОВКА")
 
         p.setFont(QFont("Helvetica", 16))
         p.drawText(
-            QRectF(0, cy - 10, self.screen_width, 120),
+            QRectF(0, cy - 10, w, 120),
             Qt.AlignmentFlag.AlignCenter,
             "Кликните по каждой из 9 красных точек 5 раз, глядя на них.\n"
             "Завершённые точки станут жёлтыми.\n\n"
@@ -222,7 +214,8 @@ class CalibrationApp:
             p.drawEllipse(QPointF(x, y), 15, 15)
 
     def _paint_measurement(self, p: QPainter):
-        cx, cy = self.screen_width // 2, self.screen_height // 2
+        w, h = self.width(), self.height()
+        cx, cy = w // 2, h // 2
 
         p.setBrush(QColor("green"))
         p.setPen(Qt.PenStyle.NoPen)
@@ -231,23 +224,23 @@ class CalibrationApp:
         p.setPen(QColor("white"))
         p.setFont(QFont("Helvetica", 16))
         p.drawText(
-            QRectF(0, cy + 30, self.screen_width, 60),
+            QRectF(0, cy + 30, w, 60),
             Qt.AlignmentFlag.AlignCenter,
             "Смотрите на зелёную точку 5 секунд...\nНе двигайте головой.",
         )
 
     def _paint_gaze(self, p: QPainter):
-        # Accuracy overlay (top-right)
+        w, h = self.width(), self.height()
+
         if self._accuracy is not None:
             p.setPen(QColor("white"))
             p.setFont(QFont("Helvetica", 14))
             p.drawText(
-                QRectF(self.screen_width - 220, 10, 210, 30),
+                QRectF(w - 220, 10, 210, 30),
                 Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
                 f"Точность: {self._accuracy}%",
             )
 
-        # Train mode indicator (top-left, below video preview)
         if self._train_mode:
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(QColor(0, 180, 0))
@@ -256,16 +249,14 @@ class CalibrationApp:
             p.setFont(QFont("Helvetica", 13, QFont.Weight.Bold))
             p.drawText(QRectF(10, 170, 130, 30), Qt.AlignmentFlag.AlignCenter, "ТРЕНИРОВКА")
 
-        # Status bar
         p.setPen(QColor("gray"))
         p.setFont(QFont("Helvetica", 12))
         p.drawText(
-            QRectF(0, 15, self.screen_width, 30),
+            QRectF(0, 15, w, 30),
             Qt.AlignmentFlag.AlignCenter,
             "Отслеживание взгляда (T = тренировка, R = перекалибровка, V = видео, Esc = выход)",
         )
 
-        # Feedback markers from train mode clicks (green dots, fade after 0.5s)
         now = time.time()
         self._feedback_markers = [(x, y, t) for x, y, t in self._feedback_markers if now - t < 0.5]
         for fx, fy, ft in self._feedback_markers:
@@ -275,7 +266,6 @@ class CalibrationApp:
             p.setPen(Qt.PenStyle.NoPen)
             p.drawEllipse(QPointF(fx, fy), 8, 8)
 
-        # Red gaze prediction dot
         if self._show_gaze_dot:
             p.setBrush(QColor("red"))
             p.setPen(Qt.PenStyle.NoPen)
@@ -295,7 +285,7 @@ class CalibrationApp:
     def _on_key(self, event: QKeyEvent):
         key = event.key()
         if key == Qt.Key.Key_Escape:
-            self._quit()
+            self._on_back()
         elif key == Qt.Key.Key_V:
             self._show_video = not self._show_video
         elif self._phase == self.PHASE_GAZE:
@@ -322,14 +312,15 @@ class CalibrationApp:
         Points appear one by one starting from top-center, then clockwise,
         with the center point last.
         """
-        margin_x = int(self.screen_width * 0.1)
-        margin_y = int(self.screen_height * 0.1)
+        w, h = self.width(), self.height()
+        margin_x = int(w * 0.1)
+        margin_y = int(h * 0.1)
 
         positions = []
         for row in range(3):
             for col in range(3):
-                x = margin_x + col * (self.screen_width - 2 * margin_x) // 2
-                y = margin_y + row * (self.screen_height - 2 * margin_y) // 2
+                x = margin_x + col * (w - 2 * margin_x) // 2
+                y = margin_y + row * (h - 2 * margin_y) // 2
                 positions.append((x, y))
 
         self._points = positions
@@ -344,7 +335,6 @@ class CalibrationApp:
             self._point_visible[i] = (i == self._point_order[0])
 
     def _on_calibration_click(self, x: int, y: int):
-        # Find closest visible, incomplete point
         closest = -1
         min_dist = float("inf")
         for i, (px, py) in enumerate(self._points):
@@ -363,7 +353,6 @@ class CalibrationApp:
         px, py = self._points[closest]
         self._point_clicks[closest] += 1
 
-        # Record this screen position for training
         self.wg.record_screen_position(px, py, "click")
 
         clicks = self._point_clicks[closest]
@@ -371,7 +360,6 @@ class CalibrationApp:
             self._point_colors[closest] = "yellow"
             self._calibrated_count += 1
 
-            # Show the next point in the sequence
             if self._calibrated_count < NUM_POINTS:
                 next_idx = self._point_order[self._calibrated_count]
                 self._point_visible[next_idx] = True
@@ -394,16 +382,14 @@ class CalibrationApp:
         self._measuring = False
         self.precision.stop_storing()
 
-        cx = self.screen_width // 2
-        cy = self.screen_height // 2
+        cx = self.width() // 2
+        cy = self.height() // 2
         self._accuracy = self.precision.calculate_precision(cx, cy)
 
-        # Go directly to gaze tracking mode
         self._phase = self.PHASE_GAZE
         self._show_gaze_dot = True
 
     def _on_gaze(self, gaze_data: dict | None, elapsed: float):
-        """Called on each gaze prediction."""
         if gaze_data is None:
             return
 
@@ -419,20 +405,17 @@ class CalibrationApp:
     # ---- Video preview ------------------------------------------------------
 
     def _start_video_preview(self):
-        """Show webcam preview in the top-left corner."""
         self._video_running = True
         self._video_thread = threading.Thread(target=self._update_video, daemon=True)
         self._video_thread.start()
 
     def _update_video(self):
-        """Continuously update video preview as QImage."""
         while self._video_running:
             frame = self.wg.get_latest_frame()
             if frame is not None:
                 preview = cv2.resize(frame, (500, 375))
                 preview = cv2.cvtColor(preview, cv2.COLOR_BGR2RGB)
 
-                # Draw landmarks if available
                 landmarks = self.wg.get_latest_landmarks()
                 if landmarks:
                     h, w = frame.shape[:2]
@@ -447,15 +430,6 @@ class CalibrationApp:
                 bytes_per_line = ch * w
                 self._video_image = QImage(
                     preview.data, w, h, bytes_per_line, QImage.Format.Format_RGB888
-                ).copy()  # .copy() so the data outlives the numpy array
+                ).copy()
 
             time.sleep(0.05)
-
-    # ---- Quit ---------------------------------------------------------------
-
-    def _quit(self):
-        self._video_running = False
-        self._timer.stop()
-        self.wg.end()
-        self._window.close()
-        self._qt_app.quit()
