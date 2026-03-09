@@ -5,7 +5,9 @@
 ```
 eyetracker/
 ├── pyproject.toml                         # Конфигурация Poetry, зависимости
-├── Makefile                               # Команды: install, run, test, clean
+├── Makefile                               # Команды: install, run, test, build, clean
+├── eyetracker.spec                        # PyInstaller спецификация сборки
+├── entitlements.plist                     # macOS entitlements (доступ к камере)
 ├── eyetracker/
 │   ├── __init__.py                        # Версия пакета
 │   ├── main.py                            # CLI точка входа (argparse)
@@ -28,6 +30,7 @@ eyetracker/
 | `opencv-python` | Захват видео, обработка изображений |
 | `mediapipe` | Детекция лица и ландмарков (FaceLandmarker) |
 | `PyQt6` | GUI калибровки и отслеживания |
+| `pyinstaller` | Сборка в нативное приложение (dev) |
 
 ---
 
@@ -460,3 +463,47 @@ def main():
 ```
 
 Сглаживание Калмана, детекция моргания и взвешенная гребневая регрессия включены по умолчанию.
+
+---
+
+## Сборка в нативное приложение
+
+Приложение собирается через PyInstaller в нативный исполняемый файл. Конфигурация сборки — `eyetracker.spec`.
+
+```bash
+make install   # установка зависимостей (включая pyinstaller)
+make build     # сборка
+```
+
+### macOS — `dist/EyeTracker.app`
+
+- Режим **onedir**: файлы живут внутри `.app` бандла, не требуется распаковка во временную директорию при каждом запуске — быстрый старт.
+- После сборки выполняется ad-hoc подпись с `entitlements.plist` (`codesign --deep --force --sign -`).
+- `entitlements.plist` содержит:
+  - `com.apple.security.device.camera` — доступ к камере
+  - `com.apple.security.cs.allow-unsigned-executable-memory` — для нативных библиотек mediapipe/opencv
+  - `com.apple.security.cs.disable-library-validation` — отключение валидации библиотек
+- `Info.plist` включает `NSCameraUsageDescription` — macOS покажет диалог запроса доступа к камере при первом запуске.
+- Для камеры на macOS используется бэкенд `cv2.CAP_AVFOUNDATION` (задаётся явно в `pipeline.py`).
+
+### Windows — `dist/EyeTracker.exe`
+
+- Режим **onefile**: один исполняемый файл, извлекает зависимости во временную директорию.
+- `console=False` — запуск без консольного окна.
+
+### Что бандлится
+
+- Пакет `mediapipe` целиком (нативные библиотеки, конфиги)
+- Модель `face_landmarker.task` из `eyetracker/models/` (если была скачана до сборки)
+- Hidden imports: mediapipe, numpy, cv2, PyQt6
+
+### Путь к модели в бандле
+
+В `pipeline.py` путь к модели определяется с учётом PyInstaller:
+
+```python
+_BASE_DIR = getattr(sys, "_MEIPASS", os.path.dirname(__file__))
+_MODEL_DIR = os.path.join(_BASE_DIR, "eyetracker", "models") if hasattr(sys, "_MEIPASS") else os.path.join(os.path.dirname(__file__), "models")
+```
+
+Если модель не найдена, она скачивается автоматически при первом запуске.
