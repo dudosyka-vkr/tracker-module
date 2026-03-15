@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
@@ -202,6 +203,8 @@ class HomeScreen(QWidget):
             return self._build_create_test_page()
         if item_id == "settings":
             return self._build_settings_page()
+        if item_id == "help":
+            return self._build_help_page()
         return self._build_placeholder_page(title)
 
     # ---- Overview page (login form + dashboard) ------------------------------
@@ -668,6 +671,124 @@ class HomeScreen(QWidget):
         self._settings.tracking_display_name = screen_name
         if self._on_monitor_changed_cb:
             self._on_monitor_changed_cb()
+
+    # ---- Help page ------------------------------------------------------------
+
+    _FAQ_ITEMS = [
+        (
+            "Как создать тест?",
+            "Перейдите в раздел «Создать тест» в боковом меню. "
+            "Выберите «Заполнить форму», укажите название теста, "
+            "загрузите обложку и добавьте изображения. Нажмите «Создать».",
+        ),
+        (
+            "Как редактировать тест?",
+            "Откройте тест из библиотеки. На странице теста нажмите «Редактировать». "
+            "Измените название, обложку или изображения. Нажмите «Сохранить».",
+        ),
+        (
+            "Как изменить порядок изображений в тесте?",
+            "В режиме редактирования теста перетащите изображение мышкой "
+            "на нужную позицию. Порядок сохранится автоматически при сохранении теста.",
+        ),
+        (
+            "Как работает отслеживание взгляда?",
+            "После калибровки система использует веб-камеру для отслеживания "
+            "положения глаз. На основе калибровочных данных она предсказывает, "
+            "куда вы смотрите на экране. Красная точка показывает текущую позицию взгляда.",
+        ),
+        (
+            "Как сменить монитор для трекинга?",
+            "Перейдите в «Настройки» и выберите нужный монитор из выпадающего списка. "
+            "По умолчанию используется основной монитор.",
+        ),
+    ]
+
+    def _build_help_page(self) -> QWidget:
+        page = QWidget()
+        page.setStyleSheet(f"background-color: {BG_MAIN};")
+
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(40, 40, 40, 40)
+        outer.setSpacing(0)
+
+        title = QLabel("Помощь")
+        title.setFont(QFont(FONT_FAMILY, 36, QFont.Weight.Bold))
+        title.setStyleSheet(f"color: {TEXT_PRIMARY}; background: transparent;")
+        outer.addWidget(title)
+        outer.addSpacing(24)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet(f"background-color: {BG_MAIN}; border: none;")
+
+        content = QWidget()
+        content.setStyleSheet(f"background-color: {BG_MAIN};")
+        vbox = QVBoxLayout(content)
+        vbox.setContentsMargins(0, 0, 0, 0)
+        vbox.setSpacing(8)
+
+        for question, answer in self._FAQ_ITEMS:
+            vbox.addWidget(self._build_faq_item(question, answer))
+
+        vbox.addStretch()
+        scroll.setWidget(content)
+        outer.addWidget(scroll)
+
+        return page
+
+    def _build_faq_item(self, question: str, answer: str) -> QWidget:
+        container = QWidget()
+        container.setStyleSheet(f"""
+            QWidget#faqItem {{
+                background-color: {CARD_BG};
+                border-radius: {CORNER_RADIUS}px;
+            }}
+        """)
+        container.setObjectName("faqItem")
+
+        vbox = QVBoxLayout(container)
+        vbox.setContentsMargins(16, 12, 16, 12)
+        vbox.setSpacing(0)
+
+        btn = QPushButton(f"▸  {question}")
+        btn.setFont(QFont(FONT_FAMILY, 14, QFont.Weight.Bold))
+        btn.setFlat(True)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setStyleSheet(f"""
+            QPushButton {{
+                color: {TEXT_PRIMARY};
+                text-align: left;
+                border: none;
+                background: transparent;
+                padding: 4px 0;
+            }}
+            QPushButton:hover {{
+                color: {BUTTON_BG};
+            }}
+        """)
+
+        answer_label = QLabel(answer)
+        answer_label.setFont(QFont(FONT_FAMILY, 13))
+        answer_label.setWordWrap(True)
+        answer_label.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent; padding: 8px 0 4px 20px;")
+        answer_label.hide()
+
+        def toggle():
+            if answer_label.isVisible():
+                answer_label.hide()
+                btn.setText(f"▸  {question}")
+            else:
+                answer_label.show()
+                btn.setText(f"▾  {question}")
+
+        btn.clicked.connect(toggle)
+
+        vbox.addWidget(btn)
+        vbox.addWidget(answer_label)
+
+        return container
 
     def _build_placeholder_page(self, title_text: str) -> QWidget:
         page = QWidget()
