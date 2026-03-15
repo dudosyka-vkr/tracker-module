@@ -19,7 +19,7 @@ from typing import Callable
 import cv2
 import numpy as np
 
-from eyetracker.util import (
+from eyetracker.core.util import (
     DataWindow,
     Eye,
     KalmanFilter,
@@ -47,7 +47,8 @@ _MODEL_URL = (
     "face_landmarker/face_landmarker/float16/latest/face_landmarker.task"
 )
 _BASE_DIR = getattr(sys, "_MEIPASS", os.path.dirname(__file__))
-_MODEL_DIR = os.path.join(_BASE_DIR, "eyetracker", "models") if hasattr(sys, "_MEIPASS") else os.path.join(os.path.dirname(__file__), "models")
+_PACKAGE_DIR = os.path.dirname(os.path.dirname(__file__))  # eyetracker/
+_MODEL_DIR = os.path.join(_BASE_DIR, "eyetracker", "models") if hasattr(sys, "_MEIPASS") else os.path.join(_PACKAGE_DIR, "models")
 _MODEL_PATH = os.path.join(_MODEL_DIR, "face_landmarker.task")
 
 

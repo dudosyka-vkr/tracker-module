@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from eyetracker.theme import (
+from eyetracker.ui.theme import (
     BG_MAIN,
     CARD_BG,
     CARD_HOVER,

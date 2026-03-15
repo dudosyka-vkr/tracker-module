@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-from eyetracker.settings import Settings
+from eyetracker.data.settings import Settings
 
 
 def test_default_tracking_display_name_is_none(tmp_path: Path):

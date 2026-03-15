@@ -1,6 +1,6 @@
 """Tests for precision calculator."""
 
-from eyetracker.calibration import PrecisionCalculator
+from eyetracker.ui.pages.calibration import PrecisionCalculator
 
 
 class TestPrecisionCalculator:

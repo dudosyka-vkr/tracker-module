@@ -19,13 +19,13 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from eyetracker.create_test_page import CreateTestChoicePage
-from eyetracker.test_form_page import FormMode, TestFormPage
-from eyetracker.test_library_page import TestLibraryPage
-from eyetracker.monitor import format_screen_label, get_available_screens
-from eyetracker.settings import Settings
-from eyetracker.test_dao import TestDao
-from eyetracker.theme import (
+from eyetracker.core.monitor import format_screen_label, get_available_screens
+from eyetracker.data.settings import Settings
+from eyetracker.data.test_dao import TestDao
+from eyetracker.ui.pages.create_test_page import CreateTestChoicePage
+from eyetracker.ui.pages.test_form_page import FormMode, TestFormPage
+from eyetracker.ui.pages.test_library_page import TestLibraryPage
+from eyetracker.ui.theme import (
     BG_MAIN,
     BG_SIDEBAR,
     BG_SIDEBAR_ACTIVE,

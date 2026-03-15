@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from eyetracker.theme import (
+from eyetracker.ui.theme import (
     BG_SIDEBAR,
     BG_SIDEBAR_ACTIVE,
     BORDER_COLOR,

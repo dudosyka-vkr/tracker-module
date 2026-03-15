@@ -4,37 +4,42 @@
 
 ```
 eyetracker/
-├── pyproject.toml                         # Конфигурация Poetry, зависимости
-├── Makefile                               # Команды: install, run, test, build, clean
-├── eyetracker.spec                        # PyInstaller спецификация сборки
-├── entitlements.plist                     # macOS entitlements (доступ к камере)
+├── pyproject.toml                             # Конфигурация Poetry, зависимости
+├── Makefile                                   # Команды: install, run, test, build, clean
+├── eyetracker.spec                            # PyInstaller спецификация сборки
+├── entitlements.plist                         # macOS entitlements (доступ к камере)
 ├── eyetracker/
-│   ├── __init__.py                        # Версия пакета
-│   ├── main.py                            # CLI точка входа (argparse)
-│   ├── app.py                             # App — QMainWindow + QStackedWidget, навигация между экранами
-│   ├── home.py                            # HomeScreen — начальный экран (sidebar + контент)
-│   ├── theme.py                           # Константы стиля macOS (цвета, шрифты, размеры)
-│   ├── settings.py                        # Settings — JSON-хранилище настроек (~/.eyetracker/settings.json)
-│   ├── monitor.py                         # Выбор монитора для трекинга (resolve_screen, get_available_screens)
-│   ├── pipeline.py                        # Трекер, детекция моргания, регрессия, оркестратор
-│   ├── calibration.py                     # CalibrationScreen (PyQt6 QPainter) + измерение точности
-│   ├── util.py                            # Eye, DataWindow, KalmanFilter, обработка изображений
-│   ├── test_dao.py                        # TestData (dataclass) + TestDao (ABC) — интерфейс хранилища тестов
-│   ├── local_test_dao.py                  # LocalTestDao — локальная реализация: ~/.eyetracker/tests/<id>/
-│   ├── create_test_page.py                # CreateTestChoicePage — выбор способа создания теста (Форма / TEST.json)
-│   ├── test_form_page.py                  # TestFormPage — форма создания/просмотра/редактирования теста + валидация
-│   ├── test_library_page.py               # TestLibraryPage — библиотека тестов (grid плиток с обложками)
-│   ├── image_grid.py                      # ImageGridWidget — галерея 16:9, drag-to-reorder, удаление, превью, readonly
-│   └── models/                            # Автоматически скачиваемая модель (face_landmarker.task)
+│   ├── __init__.py                            # Версия пакета
+│   ├── main.py                                # CLI точка входа (argparse)
+│   ├── app.py                                 # App — QMainWindow + QStackedWidget, навигация
+│   ├── ui/                                    # UI слой
+│   │   ├── theme.py                           # Константы стиля macOS (цвета, шрифты, размеры)
+│   │   ├── pages/                             # Экраны/страницы
+│   │   │   ├── home.py                        # HomeScreen — sidebar + контент
+│   │   │   ├── calibration.py                 # CalibrationScreen + PrecisionCalculator
+│   │   │   ├── create_test_page.py            # CreateTestChoicePage — выбор способа создания
+│   │   │   ├── test_form_page.py              # TestFormPage — форма create/view/edit
+│   │   │   └── test_library_page.py           # TestLibraryPage — библиотека тестов
+│   │   └── widgets/                           # Переиспользуемые виджеты
+│   │       └── image_grid.py                  # ImageGridWidget + превью + drag-to-reorder
+│   ├── data/                                  # Слой данных
+│   │   ├── test_dao.py                        # TestData + TestDao ABC
+│   │   ├── local_test_dao.py                  # LocalTestDao — ~/.eyetracker/tests/<id>/
+│   │   └── settings.py                        # Settings — ~/.eyetracker/settings.json
+│   ├── core/                                  # Ядро (pipeline, утилиты)
+│   │   ├── pipeline.py                        # Трекер, регрессия, детекция моргания
+│   │   ├── util.py                            # Eye, DataWindow, KalmanFilter
+│   │   └── monitor.py                         # Выбор монитора для трекинга
+│   └── models/                                # Автоматически скачиваемая модель
 └── tests/
-    ├── test_util.py                       # 18 тестов
-    ├── test_regression.py                 # 5 тестов
-    ├── test_blink.py                      # 3 теста
-    ├── test_precision.py                  # 4 теста
-    ├── test_settings.py                   # 4 теста
-    ├── test_monitor.py                    # 4 теста
-    ├── test_test_dao.py                   # 15 тестов
-    └── test_create_test_form.py           # 6 тестов
+    ├── test_util.py                           # 18 тестов
+    ├── test_regression.py                     # 5 тестов
+    ├── test_blink.py                          # 3 теста
+    ├── test_precision.py                      # 4 теста
+    ├── test_settings.py                       # 4 теста
+    ├── test_monitor.py                        # 4 теста
+    ├── test_test_dao.py                       # 15 тестов
+    └── test_create_test_form.py               # 6 тестов
 ```
 
 ## Зависимости

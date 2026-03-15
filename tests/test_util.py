@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from eyetracker.util import (
+from eyetracker.core.util import (
     DataWindow,
     Eye,
     grayscale,

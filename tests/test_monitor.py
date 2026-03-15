@@ -2,7 +2,7 @@
 
 from unittest.mock import MagicMock, patch
 
-from eyetracker.monitor import format_screen_label, resolve_screen
+from eyetracker.core.monitor import format_screen_label, resolve_screen
 
 
 def _make_screen(name: str, x: int = 0, y: int = 0, w: int = 1920, h: int = 1080) -> MagicMock:
@@ -17,14 +17,14 @@ def _make_screen(name: str, x: int = 0, y: int = 0, w: int = 1920, h: int = 1080
     return screen
 
 
-@patch("eyetracker.monitor.QApplication")
+@patch("eyetracker.core.monitor.QApplication")
 def test_resolve_screen_none_returns_primary(mock_app):
     primary = _make_screen("Primary")
     mock_app.primaryScreen.return_value = primary
     assert resolve_screen(None) is primary
 
 
-@patch("eyetracker.monitor.QApplication")
+@patch("eyetracker.core.monitor.QApplication")
 def test_resolve_screen_unknown_returns_primary(mock_app):
     primary = _make_screen("Primary")
     mock_app.primaryScreen.return_value = primary
@@ -32,7 +32,7 @@ def test_resolve_screen_unknown_returns_primary(mock_app):
     assert resolve_screen("NonExistent") is primary
 
 
-@patch("eyetracker.monitor.QApplication")
+@patch("eyetracker.core.monitor.QApplication")
 def test_resolve_screen_found(mock_app):
     primary = _make_screen("Primary")
     external = _make_screen("DELL U2720Q")

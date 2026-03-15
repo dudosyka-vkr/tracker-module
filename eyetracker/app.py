@@ -7,12 +7,12 @@ import sys
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication, QMainWindow, QStackedWidget
 
-from eyetracker.calibration import CalibrationScreen
-from eyetracker.home import HomeScreen
-from eyetracker.local_test_dao import LocalTestDao
-from eyetracker.monitor import resolve_screen
-from eyetracker.pipeline import EyeTracker
-from eyetracker.settings import Settings
+from eyetracker.core.monitor import resolve_screen
+from eyetracker.core.pipeline import EyeTracker
+from eyetracker.data.local_test_dao import LocalTestDao
+from eyetracker.data.settings import Settings
+from eyetracker.ui.pages.calibration import CalibrationScreen
+from eyetracker.ui.pages.home import HomeScreen
 
 
 class App:

@@ -3,8 +3,8 @@
 import numpy as np
 import pytest
 
-from eyetracker.util import Eye
-from eyetracker.pipeline import _ridge, _get_eye_feats, RidgeWeightedReg
+from eyetracker.core.util import Eye
+from eyetracker.core.pipeline import _ridge, _get_eye_feats, RidgeWeightedReg
 
 
 def _make_eye(width=20, height=15) -> Eye:

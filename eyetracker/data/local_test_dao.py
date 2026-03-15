@@ -9,7 +9,7 @@ from dataclasses import asdict
 from pathlib import Path
 from uuid import uuid4
 
-from eyetracker.test_dao import TestDao, TestData
+from eyetracker.data.test_dao import TestDao, TestData
 
 logger = logging.getLogger(__name__)
 

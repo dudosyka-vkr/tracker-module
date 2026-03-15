@@ -18,7 +18,7 @@ from PyQt6.QtCore import Qt, QTimer, QRectF, QPointF
 from PyQt6.QtGui import QColor, QFont, QPainter, QImage, QKeyEvent, QMouseEvent
 from PyQt6.QtWidgets import QWidget
 
-from eyetracker.pipeline import EyeTracker
+from eyetracker.core.pipeline import EyeTracker
 
 
 # ---------------------------------------------------------------------------

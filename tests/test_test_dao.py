@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from eyetracker.local_test_dao import LocalTestDao
+from eyetracker.data.local_test_dao import LocalTestDao
 
 
 @pytest.fixture()
