@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Callable
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QFont, QKeyEvent
+from PyQt6.QtGui import QBrush, QFont, QKeyEvent, QPainter, QPainterPath, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -13,14 +14,17 @@ from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from eyetracker.core.monitor import format_screen_label, get_available_screens
+from eyetracker.data.login_service import LoginService
 from eyetracker.data.settings import Settings
 from eyetracker.data.test_dao import TestDao
 from eyetracker.ui.pages.create_test_page import CreateTestChoicePage
@@ -34,7 +38,10 @@ from eyetracker.ui.theme import (
     BORDER_COLOR,
     BUTTON_BG,
     BUTTON_HOVER,
+    CARD_BG,
+    CARD_HOVER,
     CORNER_RADIUS,
+    ERROR_COLOR,
     FONT_FAMILY,
     SIDEBAR_ITEM_HEIGHT,
     SIDEBAR_PADDING,
@@ -61,6 +68,7 @@ class HomeScreen(QWidget):
         on_start_calibration: Callable[[], None],
         settings: Settings,
         test_dao: TestDao,
+        login_service: LoginService,
         on_monitor_changed: Callable[[], None] | None = None,
     ):
         super().__init__()
@@ -68,9 +76,11 @@ class HomeScreen(QWidget):
         self._settings = settings
         self._on_monitor_changed_cb = on_monitor_changed
         self._test_dao = test_dao
+        self._login_service = login_service
         self._detail_page: TestFormPage | None = None
         self._current_tab_id = "overview"
         self._sidebar_buttons: dict[str, QPushButton] = {}
+        self._logged_in = self._settings.auth_token is not None
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         layout = QHBoxLayout(self)
@@ -94,6 +104,22 @@ class HomeScreen(QWidget):
             self._content_stack.addWidget(page)
         self._content_stack.setCurrentWidget(self._content_pages["overview"])
         layout.addWidget(self._content_stack, stretch=1)
+
+        self._update_auth_state(self._logged_in)
+
+    # ---- Auth state ----------------------------------------------------------
+
+    def _update_auth_state(self, logged_in: bool) -> None:
+        self._logged_in = logged_in
+        for item_id, btn in self._sidebar_buttons.items():
+            btn.setVisible(item_id == "overview" or logged_in)
+        if logged_in:
+            self._overview_stack.setCurrentWidget(self._dashboard_page)
+            self._refresh_dashboard()
+        else:
+            self._overview_stack.setCurrentWidget(self._login_page)
+            if self._current_tab_id != "overview":
+                self._select_sidebar_item("overview")
 
     # ---- Sidebar -------------------------------------------------------------
 
@@ -151,6 +177,8 @@ class HomeScreen(QWidget):
             page = self._content_pages.get("tests")
             if isinstance(page, TestLibraryPage):
                 page.refresh()
+        if item_id == "overview" and self._logged_in:
+            self._refresh_dashboard()
         page = self._content_pages.get(item_id)
         if page:
             self._content_stack.setCurrentWidget(page)
@@ -176,7 +204,25 @@ class HomeScreen(QWidget):
             return self._build_settings_page()
         return self._build_placeholder_page(title)
 
+    # ---- Overview page (login form + dashboard) ------------------------------
+
     def _build_overview_page(self) -> QWidget:
+        page = QWidget()
+        page.setStyleSheet(f"background-color: {BG_MAIN};")
+
+        self._overview_stack = QStackedWidget()
+        self._login_page = self._build_login_form()
+        self._dashboard_page = self._build_dashboard()
+        self._overview_stack.addWidget(self._login_page)
+        self._overview_stack.addWidget(self._dashboard_page)
+
+        vbox = QVBoxLayout(page)
+        vbox.setContentsMargins(0, 0, 0, 0)
+        vbox.addWidget(self._overview_stack)
+
+        return page
+
+    def _build_login_form(self) -> QWidget:
         page = QWidget()
         page.setStyleSheet(f"background-color: {BG_MAIN};")
 
@@ -193,11 +239,317 @@ class HomeScreen(QWidget):
         desc.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent;")
         desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
+        input_style = f"""
+            QLineEdit {{
+                background-color: {BG_SIDEBAR};
+                color: {TEXT_PRIMARY};
+                border: 1px solid {BORDER_COLOR};
+                border-radius: {CORNER_RADIUS}px;
+                padding: 10px 14px;
+                font-size: 14px;
+            }}
+            QLineEdit:focus {{
+                border: 1px solid {BUTTON_BG};
+            }}
+        """
+
+        self._login_input = QLineEdit()
+        self._login_input.setPlaceholderText("Логин")
+        self._login_input.setFixedWidth(320)
+        self._login_input.setFont(QFont(FONT_FAMILY, 14))
+        self._login_input.setStyleSheet(input_style)
+
+        self._password_input = QLineEdit()
+        self._password_input.setPlaceholderText("Пароль")
+        self._password_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self._password_input.setFixedWidth(320)
+        self._password_input.setFont(QFont(FONT_FAMILY, 14))
+        self._password_input.setStyleSheet(input_style)
+        self._password_input.returnPressed.connect(self._on_login_click)
+
+        self._login_error = QLabel("")
+        self._login_error.setFont(QFont(FONT_FAMILY, 12))
+        self._login_error.setStyleSheet(f"color: {ERROR_COLOR}; background: transparent;")
+        self._login_error.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._login_error.setFixedWidth(320)
+        self._login_error.hide()
+
+        self._login_btn = QPushButton("Войти")
+        self._login_btn.setFixedSize(320, 44)
+        self._login_btn.setFont(QFont(FONT_FAMILY, 15, QFont.Weight.Bold))
+        self._login_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._login_btn.clicked.connect(self._on_login_click)
+        self._login_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {BUTTON_BG};
+                color: white;
+                border: none;
+                border-radius: {CORNER_RADIUS}px;
+            }}
+            QPushButton:hover {{
+                background-color: {BUTTON_HOVER};
+            }}
+            QPushButton:disabled {{
+                background-color: {BG_SIDEBAR_HOVER};
+                color: {TEXT_SECONDARY};
+            }}
+        """)
+
         vbox.addWidget(title)
         vbox.addSpacing(10)
         vbox.addWidget(desc)
+        vbox.addSpacing(30)
+        vbox.addWidget(self._login_input, alignment=Qt.AlignmentFlag.AlignCenter)
+        vbox.addSpacing(10)
+        vbox.addWidget(self._password_input, alignment=Qt.AlignmentFlag.AlignCenter)
+        vbox.addSpacing(6)
+        vbox.addWidget(self._login_error, alignment=Qt.AlignmentFlag.AlignCenter)
+        vbox.addSpacing(10)
+        vbox.addWidget(self._login_btn, alignment=Qt.AlignmentFlag.AlignCenter)
 
         return page
+
+    def _on_login_click(self) -> None:
+        username = self._login_input.text().strip()
+        password = self._password_input.text().strip()
+
+        if not username or not password:
+            self._login_error.setText("Заполните логин и пароль")
+            self._login_error.show()
+            return
+
+        self._login_btn.setEnabled(False)
+        self._login_error.hide()
+
+        try:
+            result = self._login_service.login(username, password)
+            self._settings.auth_token = result.token
+            self._login_input.clear()
+            self._password_input.clear()
+            self._update_auth_state(True)
+        except Exception as exc:
+            self._login_error.setText(f"Ошибка входа: {exc}")
+            self._login_error.show()
+        finally:
+            self._login_btn.setEnabled(True)
+
+    # ---- Dashboard (logged in overview) --------------------------------------
+
+    def _build_dashboard(self) -> QWidget:
+        page = QWidget()
+        page.setStyleSheet(f"background-color: {BG_MAIN};")
+
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(20, 20, 20, 20)
+
+        # Logout button — top right
+        logout_row = QHBoxLayout()
+        logout_row.addStretch()
+        logout_btn = QPushButton("Выйти")
+        logout_btn.setFixedSize(100, 36)
+        logout_btn.setFont(QFont(FONT_FAMILY, 13))
+        logout_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        logout_btn.clicked.connect(self._on_logout)
+        logout_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {BG_SIDEBAR};
+                color: {TEXT_PRIMARY};
+                border: 1px solid {BORDER_COLOR};
+                border-radius: {CORNER_RADIUS}px;
+            }}
+            QPushButton:hover {{
+                background-color: {BG_SIDEBAR_HOVER};
+            }}
+        """)
+        logout_row.addWidget(logout_btn)
+        outer.addLayout(logout_row)
+
+        # Center everything vertically
+        outer.addStretch()
+
+        # Title centered above tiles
+        title = QLabel("EyeTracker")
+        title.setFont(QFont(FONT_FAMILY, 36, QFont.Weight.Bold))
+        title.setStyleSheet(f"color: {TEXT_PRIMARY}; background: transparent;")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        outer.addWidget(title)
+        outer.addSpacing(50)
+
+        # Tiles container — 60% of content width
+        _TILE_SIZE = 200
+        _GAP = 16
+        # 3 tiles wide: big square + gap + 2 action tiles stacked
+        tiles_container = QWidget()
+        tiles_container.setMaximumWidth(750)
+        tiles_container.setStyleSheet("background: transparent;")
+        tiles_row = QHBoxLayout(tiles_container)
+        tiles_row.setContentsMargins(0, 0, 0, 0)
+        tiles_row.setSpacing(_GAP)
+
+        # Big tile — last opened test (square, same height as 2 small + gap)
+        self._last_test_tile = self._build_last_test_tile(_TILE_SIZE * 2 + _GAP)
+        tiles_row.addWidget(self._last_test_tile)
+
+        # Right column — two square small tiles
+        right_col = QVBoxLayout()
+        right_col.setSpacing(_GAP)
+
+        create_tile = self._build_action_tile("Создать тест", "+", self._on_tile_create, _TILE_SIZE)
+        library_tile = self._build_action_tile("Библиотека", "☰", self._on_tile_library, _TILE_SIZE)
+        right_col.addWidget(create_tile)
+        right_col.addWidget(library_tile)
+
+        tiles_row.addLayout(right_col)
+
+        outer.addWidget(tiles_container, alignment=Qt.AlignmentFlag.AlignHCenter)
+
+        outer.addStretch()
+
+        return page
+
+    def _build_action_tile(self, label: str, icon: str, on_click: Callable, size: int = 200) -> QPushButton:
+        btn = QPushButton(f"{icon}\n{label}")
+        btn.setFixedSize(size, size)
+        btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        btn.setFont(QFont(FONT_FAMILY, 16, QFont.Weight.Bold))
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.clicked.connect(on_click)
+        btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {CARD_BG};
+                color: {TEXT_PRIMARY};
+                border: none;
+                border-radius: {CORNER_RADIUS}px;
+                padding: 20px;
+            }}
+            QPushButton:hover {{
+                background-color: {CARD_HOVER};
+            }}
+        """)
+        return btn
+
+    def _build_last_test_tile(self, size: int = 416) -> QWidget:
+        self._last_test_tile_size = size
+        tile = QWidget()
+        tile.setFixedSize(size, size)
+        tile.setStyleSheet(f"""
+            QWidget#lastTestTile {{
+                background-color: {CARD_BG};
+                border-radius: {CORNER_RADIUS}px;
+            }}
+            QWidget#lastTestTile:hover {{
+                background-color: {CARD_HOVER};
+            }}
+        """)
+        tile.setObjectName("lastTestTile")
+        tile.setCursor(Qt.CursorShape.PointingHandCursor)
+        tile.mousePressEvent = lambda e: self._on_tile_last_test()
+
+        vbox = QVBoxLayout(tile)
+        vbox.setContentsMargins(0, 0, 0, 16)
+        vbox.setSpacing(8)
+
+        self._last_test_cover = QLabel()
+        self._last_test_cover.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._last_test_cover.setMinimumHeight(180)
+        self._last_test_cover.setStyleSheet(f"""
+            background-color: {BG_SIDEBAR};
+            border-top-left-radius: {CORNER_RADIUS}px;
+            border-top-right-radius: {CORNER_RADIUS}px;
+        """)
+        vbox.addWidget(self._last_test_cover, stretch=1)
+
+        self._last_test_name = QLabel("Нет последнего теста")
+        self._last_test_name.setFont(QFont(FONT_FAMILY, 15, QFont.Weight.Bold))
+        self._last_test_name.setStyleSheet(f"color: {TEXT_PRIMARY}; background: transparent; padding-left: 16px;")
+        vbox.addWidget(self._last_test_name)
+
+        return tile
+
+    @staticmethod
+    def _round_top_pixmap(pixmap: QPixmap, radius: int) -> QPixmap:
+        """Return a copy of *pixmap* with top corners rounded."""
+        rounded = QPixmap(pixmap.size())
+        rounded.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(rounded)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        path = QPainterPath()
+        w, h = float(pixmap.width()), float(pixmap.height())
+        path.moveTo(radius, 0)
+        path.lineTo(w - radius, 0)
+        path.arcTo(w - 2 * radius, 0, 2 * radius, 2 * radius, 90, -90)
+        path.lineTo(w, h)
+        path.lineTo(0, h)
+        path.lineTo(0, radius)
+        path.arcTo(0, 0, 2 * radius, 2 * radius, 180, -90)
+        path.closeSubpath()
+        painter.setClipPath(path)
+        painter.drawPixmap(0, 0, pixmap)
+        painter.end()
+        return rounded
+
+    def _refresh_dashboard(self) -> None:
+        test_id = self._settings.last_opened_test_id
+        test = self._test_dao.load(test_id) if test_id else None
+
+        placeholder_style = f"""
+            background-color: {BG_SIDEBAR};
+            color: {TEXT_SECONDARY};
+            border-top-left-radius: {CORNER_RADIUS}px;
+            border-top-right-radius: {CORNER_RADIUS}px;
+        """
+
+        if test is not None:
+            cover_path = self._test_dao.get_cover_path(test)
+            if cover_path.is_file():
+                tile_w = self._last_test_tile_size
+                cover_h = tile_w - 50  # leave room for name label
+                pixmap = QPixmap(str(cover_path))
+                scaled = pixmap.scaled(
+                    tile_w,
+                    cover_h,
+                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                # Crop to exact tile width × cover height
+                if scaled.width() > tile_w or scaled.height() > cover_h:
+                    x = (scaled.width() - tile_w) // 2
+                    y = (scaled.height() - cover_h) // 2
+                    scaled = scaled.copy(x, y, tile_w, cover_h)
+                rounded = self._round_top_pixmap(scaled, CORNER_RADIUS)
+                self._last_test_cover.setPixmap(rounded)
+                self._last_test_cover.setStyleSheet("background: transparent;")
+            else:
+                self._last_test_cover.clear()
+                self._last_test_cover.setText("Нет превью")
+                self._last_test_cover.setStyleSheet(placeholder_style)
+            self._last_test_name.setText(test.name)
+        else:
+            self._last_test_cover.clear()
+            self._last_test_cover.setText("Нет превью")
+            self._last_test_cover.setFont(QFont(FONT_FAMILY, 14))
+            self._last_test_cover.setStyleSheet(placeholder_style)
+            self._last_test_name.setText("Нет последнего теста")
+
+    def _on_tile_create(self) -> None:
+        self._select_sidebar_item("create_test")
+
+    def _on_tile_library(self) -> None:
+        self._select_sidebar_item("tests")
+
+    def _on_tile_last_test(self) -> None:
+        test_id = self._settings.last_opened_test_id
+        if test_id and self._test_dao.load(test_id):
+            self._select_sidebar_item("tests")
+            self._show_test_detail(test_id)
+        else:
+            self._select_sidebar_item("tests")
+
+    def _on_logout(self) -> None:
+        self._settings.auth_token = None
+        self._update_auth_state(False)
+
+    # ---- Other content pages -------------------------------------------------
 
     def _build_calibration_page(self) -> QWidget:
         page = QWidget()
@@ -294,7 +646,6 @@ class HomeScreen(QWidget):
         return page
 
     def _refresh_monitor_combo(self):
-        """Rebuild the monitor combo box from currently available screens."""
         combo = self._monitor_combo
         combo.blockSignals(True)
         combo.clear()
@@ -353,6 +704,7 @@ class HomeScreen(QWidget):
         test = self._test_dao.load(test_id)
         if test is None:
             return
+        self._settings.last_opened_test_id = test_id
         self._detail_page = TestFormPage(dao=self._test_dao, mode=mode, test_data=test)
         if mode == FormMode.EDIT:
             self._detail_page.back_requested.connect(lambda tid=test_id: self._show_test_detail(tid, FormMode.VIEW))

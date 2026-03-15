@@ -36,6 +36,32 @@ class Settings:
             self._data["tracking_display_name"] = value
         self._save()
 
+    @property
+    def auth_token(self) -> str | None:
+        """Stored JWT token. None means logged out."""
+        return self._data.get("auth_token")
+
+    @auth_token.setter
+    def auth_token(self, value: str | None) -> None:
+        if value is None:
+            self._data.pop("auth_token", None)
+        else:
+            self._data["auth_token"] = value
+        self._save()
+
+    @property
+    def last_opened_test_id(self) -> str | None:
+        """ID of the last opened test."""
+        return self._data.get("last_opened_test_id")
+
+    @last_opened_test_id.setter
+    def last_opened_test_id(self, value: str | None) -> None:
+        if value is None:
+            self._data.pop("last_opened_test_id", None)
+        else:
+            self._data["last_opened_test_id"] = value
+        self._save()
+
     def _load(self) -> None:
         if not self._path.is_file():
             return
