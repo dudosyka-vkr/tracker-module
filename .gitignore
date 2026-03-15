@@ -12,3 +12,9 @@ dist/
 
 # Downloaded mediapipe model
 eyetracker/models/
+
+# Ignore all .md except project docs
+*.md
+!README.md
+!PROJECT.md
+!TECH_DEBT.md

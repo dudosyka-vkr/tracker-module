@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPushButton,
     QStackedWidget,
     QVBoxLayout,
@@ -44,7 +45,6 @@ from eyetracker.ui.theme import (
 
 _SIDEBAR_ITEMS = [
     {"id": "overview", "title": "Обзор", "icon": "⌂"},
-    {"id": "devices", "title": "Устройства", "icon": "⎚"},
     {"id": "calibration", "title": "Калибровка", "icon": "◎"},
     {"id": "tests", "title": "Тесты", "icon": "☰"},
     {"id": "create_test", "title": "Создать тест", "icon": "+"},
@@ -69,6 +69,8 @@ class HomeScreen(QWidget):
         self._on_monitor_changed_cb = on_monitor_changed
         self._test_dao = test_dao
         self._detail_page: TestFormPage | None = None
+        self._current_tab_id = "overview"
+        self._sidebar_buttons: dict[str, QPushButton] = {}
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         layout = QHBoxLayout(self)
@@ -132,6 +134,7 @@ class HomeScreen(QWidget):
             """)
             btn.clicked.connect(lambda checked, iid=item["id"]: self._on_sidebar_click(iid))
             self._btn_group.addButton(btn)
+            self._sidebar_buttons[item["id"]] = btn
             vbox.addWidget(btn)
 
             if item["id"] == "overview":
@@ -141,6 +144,7 @@ class HomeScreen(QWidget):
         return sidebar
 
     def _on_sidebar_click(self, item_id: str):
+        self._current_tab_id = item_id
         if item_id == "settings":
             self._refresh_monitor_combo()
         if item_id == "tests":
@@ -150,6 +154,12 @@ class HomeScreen(QWidget):
         page = self._content_pages.get(item_id)
         if page:
             self._content_stack.setCurrentWidget(page)
+
+    def _select_sidebar_item(self, item_id: str) -> None:
+        btn = self._sidebar_buttons.get(item_id)
+        if btn:
+            btn.setChecked(True)
+            self._on_sidebar_click(item_id)
 
     # ---- Content pages -------------------------------------------------------
 
@@ -344,7 +354,10 @@ class HomeScreen(QWidget):
         if test is None:
             return
         self._detail_page = TestFormPage(dao=self._test_dao, mode=mode, test_data=test)
-        self._detail_page.back_requested.connect(self._back_to_tests)
+        if mode == FormMode.EDIT:
+            self._detail_page.back_requested.connect(lambda tid=test_id: self._show_test_detail(tid, FormMode.VIEW))
+        else:
+            self._detail_page.back_requested.connect(self._back_to_tests)
         self._detail_page.edit_requested.connect(lambda tid=test_id: self._show_test_detail(tid, FormMode.EDIT))
         self._detail_page.test_updated.connect(lambda tid=test_id: self._show_test_detail(tid, FormMode.VIEW))
         self._detail_page.test_deleted.connect(self._back_to_tests)
@@ -393,4 +406,19 @@ class HomeScreen(QWidget):
 
     def keyPressEvent(self, event: QKeyEvent):  # noqa: N802
         if event.key() == Qt.Key.Key_Escape:
-            QApplication.quit()
+            if self._detail_page is not None and self._content_stack.currentWidget() is self._detail_page:
+                self._detail_page.back_requested.emit()
+            elif self._current_tab_id != "overview":
+                self._select_sidebar_item("overview")
+            else:
+                reply = QMessageBox.question(
+                    self,
+                    "Выход",
+                    "Вы уверены, что хотите выйти?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if reply == QMessageBox.StandardButton.Yes:
+                    QApplication.quit()
+        else:
+            super().keyPressEvent(event)
