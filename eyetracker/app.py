@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import QApplication, QMainWindow, QStackedWidget
 
 from eyetracker.core.monitor import resolve_screen
 from eyetracker.core.pipeline import EyeTracker
+from eyetracker.data.draft_cache import DraftCache
 from eyetracker.data.local_test_dao import LocalTestDao
 from eyetracker.data.login_service import LocalLoginService
 from eyetracker.data.settings import Settings
@@ -37,6 +38,7 @@ class App:
         self._settings = Settings()
         self._test_dao = LocalTestDao()
         self._login_service = LocalLoginService()
+        self._draft_cache = DraftCache()
 
         self._window = QMainWindow()
         self._window.setWindowTitle("EyeTracker")
@@ -49,6 +51,7 @@ class App:
             settings=self._settings,
             test_dao=self._test_dao,
             login_service=self._login_service,
+            draft_cache=self._draft_cache,
             on_monitor_changed=self._move_to_target_screen,
         )
         self._calibration: CalibrationScreen | None = None

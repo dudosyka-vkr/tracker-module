@@ -195,6 +195,7 @@ class ImageGridWidget(QWidget):
     """Tile grid showing a '+' add-button followed by 16:9 image thumbnails."""
 
     add_clicked = pyqtSignal()
+    images_changed = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None, readonly: bool = False):
         super().__init__(parent)
@@ -227,6 +228,7 @@ class ImageGridWidget(QWidget):
             Qt.TransformationMode.SmoothTransformation,
         )
         self._rebuild_grid()
+        self.images_changed.emit()
         return True
 
     def get_image_paths(self) -> list[str]:
@@ -258,6 +260,7 @@ class ImageGridWidget(QWidget):
             self._paths.remove(path)
             self._pixmaps.pop(path, None)
             self._rebuild_grid()
+            self.images_changed.emit()
 
     def clear(self) -> None:
         self._paths.clear()
@@ -313,6 +316,7 @@ class ImageGridWidget(QWidget):
         self._paths.pop(source_idx)
         self._paths.insert(target_idx, source_path)
         self._rebuild_grid()
+        self.images_changed.emit()
         event.acceptProposedAction()
 
     def _index_at_pos(self, pos: QPoint) -> int | None:

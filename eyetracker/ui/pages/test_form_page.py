@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from eyetracker.data.draft_cache import DraftCache, DraftData
 from eyetracker.data.test_dao import TestDao, TestData
 from eyetracker.ui.widgets.image_grid import ImageGridWidget
 from eyetracker.ui.theme import (
@@ -94,6 +95,10 @@ class TestFormPage(QWidget):
         self._mode = mode
         self._test_data = test_data
         self._cover_path: str | None = None
+        self._draft_cache: DraftCache | None = None
+        self._draft_type: str = "create"
+        self._draft_test_id: str | None = None
+        self._restored_from_draft = False
         self.setStyleSheet(f"background-color: {BG_MAIN};")
 
         root = QVBoxLayout(self)
@@ -166,8 +171,10 @@ class TestFormPage(QWidget):
         layout.addStretch()
 
         if self._mode == FormMode.CREATE:
+            self._build_draft_actions(layout)
             layout.addWidget(self._make_action_button("Создать", self._on_create_clicked))
         elif self._mode == FormMode.EDIT:
+            self._build_draft_actions(layout)
             layout.addWidget(self._make_action_button("Сохранить", self._on_save_clicked))
         elif self._mode == FormMode.VIEW:
             self._build_view_actions(layout)
@@ -235,6 +242,38 @@ class TestFormPage(QWidget):
                 """)
             btn.clicked.connect(handler)
             layout.addWidget(btn)
+
+    def _build_draft_actions(self, layout: QHBoxLayout) -> None:
+        outline_style = f"""
+            QPushButton {{
+                background-color: transparent;
+                color: {TEXT_SECONDARY};
+                border: 1px solid {BORDER_COLOR};
+                border-radius: {CORNER_RADIUS}px;
+                padding: 0 14px;
+            }}
+            QPushButton:hover {{
+                border-color: {TEXT_SECONDARY};
+                color: {TEXT_PRIMARY};
+            }}
+        """
+
+        self._cancel_draft_btn = QPushButton("Отменить восстановление")
+        self._cancel_draft_btn.setFixedHeight(34)
+        self._cancel_draft_btn.setFont(QFont(FONT_FAMILY, 12))
+        self._cancel_draft_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._cancel_draft_btn.setStyleSheet(outline_style)
+        self._cancel_draft_btn.clicked.connect(self._on_cancel_draft)
+        self._cancel_draft_btn.setVisible(False)
+        layout.addWidget(self._cancel_draft_btn)
+
+        save_draft_btn = QPushButton("Сохранить как черновик")
+        save_draft_btn.setFixedHeight(34)
+        save_draft_btn.setFont(QFont(FONT_FAMILY, 12))
+        save_draft_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        save_draft_btn.setStyleSheet(outline_style)
+        save_draft_btn.clicked.connect(self._on_save_as_draft)
+        layout.addWidget(save_draft_btn)
 
     # -- name section --------------------------------------------------------
 
@@ -338,6 +377,69 @@ class TestFormPage(QWidget):
         image_paths = [str(self._dao.get_image_path(test, f)) for f in test.image_filenames]
         self._image_grid.set_images(image_paths)
 
+    def set_draft_cache(
+        self,
+        cache: DraftCache,
+        draft_type: str = "create",
+        test_id: str | None = None,
+    ) -> None:
+        self._draft_cache = cache
+        self._draft_type = draft_type
+        self._draft_test_id = test_id
+        self._name_edit.textChanged.connect(self._auto_save_draft)
+        self._image_grid.images_changed.connect(self._auto_save_draft)
+
+    def _auto_save_draft(self) -> None:
+        if self._draft_cache is None:
+            return
+        draft = DraftData(
+            draft_type=self._draft_type,
+            test_id=self._draft_test_id,
+            name=self._name_edit.text(),
+            cover_path=self._cover_path,
+            image_paths=self._image_grid.get_image_paths(),
+        )
+        self._draft_cache.save(draft)
+
+    def restore_from_draft(self, draft: DraftData) -> None:
+        self._restored_from_draft = True
+        if hasattr(self, "_cancel_draft_btn"):
+            self._cancel_draft_btn.setVisible(True)
+        self._name_edit.setText(draft.name)
+        if draft.cover_path:
+            self._set_cover_display(draft.cover_path)
+        if draft.image_paths:
+            self._image_grid.set_images(draft.image_paths)
+
+    def _on_cancel_draft(self) -> None:
+        if self._draft_cache:
+            self._draft_cache.clear()
+        self._restored_from_draft = False
+        self._cancel_draft_btn.setVisible(False)
+        if self._mode == FormMode.EDIT and self._test_data is not None:
+            self._populate(self._test_data)
+        else:
+            self._name_edit.clear()
+            self._cover_path = None
+            self._cover_preview.setText("Нет обложки\n\nНажмите для выбора")
+            self._cover_preview.setIcon(QIcon())
+            self._cover_preview.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {BG_SIDEBAR};
+                    border: 2px dashed {BORDER_COLOR};
+                    border-radius: {CORNER_RADIUS}px;
+                    color: {TEXT_SECONDARY};
+                }}
+                QPushButton:hover {{
+                    border-color: {TEXT_SECONDARY};
+                }}
+            """)
+            self._image_grid.clear()
+
+    def _on_save_as_draft(self) -> None:
+        self._auto_save_draft()
+        self.back_requested.emit()
+
     def _set_cover_display(self, path: str) -> None:
         self._cover_path = path
         pm = QPixmap(path).scaled(
@@ -367,6 +469,7 @@ class TestFormPage(QWidget):
             return
         self._set_cover_display(path)
         self._cover_error.setVisible(False)
+        self._auto_save_draft()
 
     def _on_add_image(self) -> None:
         path = pick_image(self)
@@ -393,6 +496,8 @@ class TestFormPage(QWidget):
                 cover_src=Path(self._cover_path),  # type: ignore[arg-type]
                 image_srcs=[Path(p) for p in self._image_grid.get_image_paths()],
             )
+            if self._draft_cache:
+                self._draft_cache.clear()
             QMessageBox.information(self, "Успех", "Тест успешно создан")
             self.test_created.emit()
         except OSError as exc:
@@ -416,6 +521,8 @@ class TestFormPage(QWidget):
                 cover_src=Path(self._cover_path),  # type: ignore[arg-type]
                 image_srcs=[Path(p) for p in self._image_grid.get_image_paths()],
             )
+            if self._draft_cache:
+                self._draft_cache.clear()
             QMessageBox.information(self, "Успех", "Тест успешно сохранён")
             self.test_updated.emit()
         except OSError as exc:
