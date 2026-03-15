@@ -15,31 +15,51 @@ eyetracker/
 │   ├── ui/                                    # UI слой
 │   │   ├── theme.py                           # Константы стиля macOS (цвета, шрифты, размеры)
 │   │   ├── pages/                             # Экраны/страницы
-│   │   │   ├── home.py                        # HomeScreen — sidebar + контент
+│   │   │   ├── home.py                        # HomeScreen — sidebar + контент + навигация
 │   │   │   ├── calibration.py                 # CalibrationScreen + PrecisionCalculator
 │   │   │   ├── create_test_page.py            # CreateTestChoicePage — выбор способа создания
 │   │   │   ├── test_form_page.py              # TestFormPage — форма create/view/edit
-│   │   │   └── test_library_page.py           # TestLibraryPage — библиотека тестов
+│   │   │   ├── test_library_page.py           # TestLibraryPage — библиотека тестов
+│   │   │   ├── test_run_screen.py             # TestRunScreen — последовательный показ изображений
+│   │   │   ├── records_list_page.py           # RecordsListPage — таблица результатов теста
+│   │   │   └── record_detail_page.py          # RecordDetailPage — детали записи + экспорт
 │   │   └── widgets/                           # Переиспользуемые виджеты
 │   │       └── image_grid.py                  # ImageGridWidget + превью + drag-to-reorder
 │   ├── data/                                  # Слой данных
-│   │   ├── test_dao.py                        # TestData + TestDao ABC
-│   │   ├── local_test_dao.py                  # LocalTestDao — ~/.eyetracker/tests/<id>/
-│   │   └── settings.py                        # Settings — ~/.eyetracker/settings.json
+│   │   ├── settings.py                        # Settings — ~/.eyetracker/settings.json
+│   │   ├── draft_cache.py                     # DraftCache — автосохранение черновиков форм
+│   │   ├── login/                             # Модуль авторизации
+│   │   │   ├── service.py                     # LoginService ABC
+│   │   │   └── local_service.py               # LocalLoginService — локальная заглушка
+│   │   ├── record/                            # Модуль записей результатов
+│   │   │   ├── service.py                     # RecordService ABC + Record, RecordSummary, RecordQuery
+│   │   │   └── local_service.py               # LocalRecordService — ~/.eyetracker/records/
+│   │   └── test/                              # Модуль тестов
+│   │       ├── dao.py                         # TestData + TestDao ABC
+│   │       └── local_dao.py                   # LocalTestDao — ~/.eyetracker/tests/<id>/
 │   ├── core/                                  # Ядро (pipeline, утилиты)
 │   │   ├── pipeline.py                        # Трекер, регрессия, детекция моргания
 │   │   ├── util.py                            # Eye, DataWindow, KalmanFilter
-│   │   └── monitor.py                         # Выбор монитора для трекинга
+│   │   ├── monitor.py                         # Выбор монитора для трекинга
+│   │   ├── metrics.py                         # GazeMetricsAggregator — агрегация метрик взгляда
+│   │   ├── report_export.py                   # Экспорт записи в ZIP-архив
+│   │   └── time_fmt.py                        # Форматирование ISO 8601 → DD.MM.YYYY HH:MM
 │   └── models/                                # Автоматически скачиваемая модель
 └── tests/
     ├── test_util.py                           # 18 тестов
     ├── test_regression.py                     # 5 тестов
     ├── test_blink.py                          # 3 теста
     ├── test_precision.py                      # 4 теста
-    ├── test_settings.py                       # 4 теста
+    ├── test_settings.py                       # 9 тестов
     ├── test_monitor.py                        # 4 теста
     ├── test_test_dao.py                       # 15 тестов
-    └── test_create_test_form.py               # 6 тестов
+    ├── test_create_test_form.py               # 6 тестов
+    ├── test_draft_cache.py                    # 8 тестов
+    ├── test_login_service.py                  # 3 теста
+    ├── test_metrics.py                        # 5 тестов
+    ├── test_record_service.py                 # 8 тестов
+    ├── test_report_export.py                  # 3 теста
+    └── test_time_fmt.py                       # 4 теста
 ```
 
 ## Зависимости
@@ -359,8 +379,11 @@ def calculate_precision(self, target_x: float, target_y: float) -> float:
 
 ### 7. Настройки — `settings.py`
 
-JSON-хранилище настроек приложения в `~/.eyetracker/settings.json`. Текущие настройки:
+JSON-хранилище настроек приложения в `~/.eyetracker/settings.json`. Настройки:
 - `tracking_display_name` — имя монитора для трекинга (`None` = основной)
+- `auth_token` — JWT-токен авторизации (`None` = не авторизован)
+- `skip_calibration` — пропускать фазу кликов по точкам калибровки (`false` по умолчанию)
+- `last_opened_test_id` — ID последнего открытого теста (для восстановления состояния)
 
 ### 8. Выбор монитора — `monitor.py`
 
@@ -369,7 +392,29 @@ JSON-хранилище настроек приложения в `~/.eyetracker/
 - `resolve_screen(name)` — найти экран по имени, fallback на primary
 - `format_screen_label(screen)` — форматирование строки для combo box
 
-### 9. Хранилище тестов — `test_dao.py`, `local_test_dao.py`
+### 9. Агрегация метрик взгляда — `metrics.py`
+
+**`GazeMetricsAggregator`** — собирает точки взгляда во время показа изображения и группирует их:
+- Нормализует пиксельные координаты в диапазон 0..1 относительно размера экрана
+- Группирует по `k=10` последовательным точкам
+- Для каждой группы вычисляет средний `x`, `y` и `count`
+- Результат: `list[GazeGroup]` с полями `x`, `y`, `count`
+
+### 10. Экспорт отчётов — `report_export.py`
+
+**`export_record_zip(record, save_path)`** — создаёт ZIP-архив с результатами записи:
+- `report.json` — полный JSON записи (все поля Record, включая items и metrics)
+- `image_1.json`, `image_2.json`, ... — метрики для каждого изображения отдельно
+
+### 11. Форматирование времени — `time_fmt.py`
+
+**`format_datetime(iso_str)`** — конвертирует ISO 8601 строку в человекочитаемый формат `DD.MM.YYYY HH:MM`. Обрабатывает timezone-aware строки (конвертирует в локальное время). При ошибке парсинга возвращает исходную строку.
+
+### 12. Слой данных
+
+Данные организованы в модули с разделением ABC-интерфейса и локальной реализации:
+
+#### Тесты — `data/test/`
 
 Абстрактный интерфейс `TestDao` (ABC) с методами `create`, `update`, `load_all`, `load`, `delete`, `get_cover_path`, `get_image_path`. Позволяет подменять реализацию (локальная ↔ удалённая).
 
@@ -388,13 +433,42 @@ JSON-хранилище настроек приложения в `~/.eyetracker/
 
 При вызове `create()` файлы **копируются** из оригинального местоположения в директорию теста. Метаданные хранят только относительные имена файлов. При `update()` файлы сначала копируются во временную директорию (`<id>_tmp`), затем старая удаляется и tmp переименовывается — это позволяет безопасно обновлять тест, даже если источники указывают на файлы внутри самого теста.
 
-### 10. Создание теста — UI
+#### Записи результатов — `data/record/`
+
+Модели данных:
+- **`Record`** — полная запись: `id`, `test_id`, `user_login`, `started_at`, `finished_at`, `duration_ms`, `items: list[RecordItem]`, `created_at`
+- **`RecordItem`** — результат для одного изображения: `image_filename`, `image_index`, `metrics: RecordItemMetrics`
+- **`RecordItemMetrics`** — метрики: `gaze_groups` (список групп взгляда с `x`, `y`, `count`)
+- **`RecordSummary`** — облегчённая версия Record без `items` (для списков)
+- **`RecordQuery`** — параметры запроса: `test_id`, `user_login`, `date_from`, `date_to`, `page`, `page_size`
+
+**`RecordService`** (ABC) — методы `save(record)`, `load(record_id)`, `query(query)`
+
+**`LocalRecordService`** — хранит каждую запись как отдельный JSON-файл:
+```
+~/.eyetracker/records/<record_id>.json
+```
+
+Метод `query()` возвращает `RecordListResult` с `list[RecordSummary]` (без загрузки тяжёлых items/metrics). Поддерживает фильтрацию по `test_id`, `user_login`, диапазону дат и пагинацию.
+
+#### Авторизация — `data/login/`
+
+**`LoginService`** (ABC) — метод `login(login, password) -> str` (возвращает токен)
+
+**`LocalLoginService`** — принимает любой login/password, возвращает заглушку токена. В будущем будет заменён на HTTP-реализацию.
+
+#### Черновики — `data/draft_cache.py`
+
+**`DraftCache`** — автосохранение незавершённых форм создания/редактирования теста в `~/.eyetracker/draft.json`. При следующем открытии приложения предлагает восстановить черновик. Хранит тип (`create`/`edit`), `test_id`, имя, обложку, список изображений.
+
+### 13. Создание теста — UI
 
 - **`CreateTestChoicePage`** (`create_test_page.py`) — две карточки: "Форма" (создание через UI) и "TEST.json" (заглушка)
 - **`TestFormPage`** (`test_form_page.py`) — универсальная форма с тремя режимами (`FormMode.CREATE`, `VIEW`, `EDIT`):
   - **CREATE**: пустая форма, кнопка "Создать", запись через `TestDao.create()`
-  - **VIEW**: pre-populated readonly, поля заблокированы, нет кнопки "+", кнопки действий: Редактировать / Использовать / Выгрузить Json / Удалить
+  - **VIEW**: pre-populated readonly, поля заблокированы, нет кнопки "+", кнопки действий: Пройти / Результаты / Редактировать / Выгрузить Json / Удалить
   - **EDIT**: pre-populated editable, кнопка "Сохранить", запись через `TestDao.update()`
+- **Сигналы TestFormPage**: `back_requested`, `edit_requested`, `run_test_requested`, `results_requested`, `test_updated`, `test_deleted`, `test_created`
 - **`ImageGridWidget`** (`image_grid.py`) — плиточная галерея с кнопкой "+" первой; плитки 16:9 (280×158), left-aligned, поддержка readonly режима:
   - **Drag-to-reorder**: Qt Native Drag & Drop (`QDrag` + `QMimeData`) для перестановки изображений в edit/create mode; полупрозрачный thumbnail при перетаскивании, подсветка целевой позиции
   - **Удаление**: красная кнопка "✕" в правом верхнем углу каждого тайла (edit/create mode)
@@ -403,21 +477,53 @@ JSON-хранилище настроек приложения в `~/.eyetracker/
 - Валидация: inline (под каждым полем) + финальная при "Создать"/"Сохранить"
 - File picker с фильтром `*.png *.jpg *.jpeg *.bmp *.gif *.webp` + пост-валидация через `QPixmap.isNull()`
 
-### 11. Библиотека тестов — `test_library_page.py`
+### 14. Библиотека тестов — `test_library_page.py`
 
 - **`TestLibraryPage`** — grid плиток со всеми тестами (обложка + название)
 - Empty state при отсутствии тестов
 - Клик по плитке → сигнал `test_selected(test_id)` → открытие в режиме просмотра
 - `refresh()` — перезагрузка из DAO (вызывается при переключении на вкладку, после создания/удаления/редактирования)
 
+### 15. Прохождение теста — `test_run_screen.py`
+
+**`TestRunScreen`** — полноэкранный показ изображений теста с параллельным трекингом взгляда:
+- Получает откалиброванный `EyeTracker` из `CalibrationScreen`
+- Показывает изображения последовательно, каждое на заданное время
+- Для каждого изображения собирает точки взгляда через `GazeMetricsAggregator`
+- По завершении возвращает `get_results()` — список `(filename, aggregator)` пар
+- `App._build_record()` формирует `Record` из результатов и сохраняет через `RecordService`
+
+### 16. История результатов — UI
+
+#### Список записей — `records_list_page.py`
+
+**`RecordsListPage`** — таблица записей для конкретного теста:
+- `QTableWidget` с колонками: дата/время, пользователь, кнопка "Посмотреть отчет"
+- Empty state: "Пока нет прохождений"
+- Данные загружаются через `RecordService.query(RecordQuery(test_id=...))`
+- Кнопка "← Назад" возвращает к странице теста
+
+#### Детали записи — `record_detail_page.py`
+
+**`RecordDetailPage`** — детальный просмотр одной записи:
+- Заголовок: название теста, логин пользователя, дата/время
+- **Горизонтальные табы** — кнопки с номерами изображений (1, 2, 3, ...). Клик по табу показывает метрики выбранного изображения
+- Область контента: прокручиваемый monospace JSON с метриками выбранного изображения (`gaze_groups`)
+- Кнопка **"Выгрузить отчет"** — `QFileDialog.getSaveFileName()` → `export_record_zip()` → ZIP-архив
+
 ---
 
 ## Навигация между экранами — `app.py`
 
-Приложение использует `QStackedWidget` для переключения между экранами:
+Приложение использует два уровня `QStackedWidget`:
 
+1. **`App._stack`** — верхний уровень (полноэкранные): HomeScreen ↔ CalibrationScreen ↔ TestRunScreen
+2. **`HomeScreen._content_stack`** — внутренний (контент sidebar): страницы вкладок + динамически добавляемые detail/records/readiness страницы
+
+Экраны:
 - **HomeScreen** (`home.py`) — начальный экран с sidebar (macOS-стиль) и контентными страницами
 - **CalibrationScreen** (`calibration.py`) — полноэкранная калибровка с QPainter
+- **TestRunScreen** (`test_run_screen.py`) — полноэкранный показ изображений теста
 
 ### Sidebar (боковое меню)
 
@@ -425,25 +531,40 @@ JSON-хранилище настроек приложения в `~/.eyetracker/
 
 | Пункт | ID | Описание |
 |-------|----|----------|
-| Обзор | `overview` | Главная страница приложения |
-| Устройства | `devices` | Заглушка (скоро) |
-| Калибровка | `calibration` | Запуск калибровки (fullscreen) |
+| Обзор | `overview` | Логин-форма / дашборд (зависит от состояния авторизации) |
+| Демо-трекер | `calibration` | Запуск калибровки (fullscreen) |
 | Тесты | `tests` | Библиотека тестов (grid → просмотр → редактирование) |
 | Создать тест | `create_test` | Создание теста через форму или TEST.json |
-| Настройки | `settings` | Выбор монитора для трекинга |
-| Помощь | `help` | Заглушка (скоро) |
+| Настройки | `settings` | Выбор монитора, пропуск калибровки |
+| Помощь | `help` | FAQ со сворачиваемыми ответами |
+
+Пункты кроме "Обзор" скрыты до авторизации.
 
 ### Dependency Injection
 
 `App` создаёт зависимости и передаёт их вниз:
-- `Settings` → `HomeScreen` (настройки монитора)
+- `Settings` → `HomeScreen` (настройки монитора, авторизация)
 - `LocalTestDao` → `HomeScreen` → `TestFormPage` / `TestLibraryPage` (хранение тестов)
+- `LocalLoginService` → `HomeScreen` (авторизация)
+- `LocalRecordService` → `HomeScreen` → `RecordsListPage` / `RecordDetailPage` (записи результатов)
+- `DraftCache` → `HomeScreen` → `TestFormPage` (автосохранение черновиков)
 
 Навигация через коллбеки:
 - `HomeScreen.on_start_calibration` → `App._go_to_calibration()` — создаёт новый `EyeTracker` + `CalibrationScreen`
+- `HomeScreen.on_start_test_run(test)` → `App._go_to_test_run()` — калибровка → `TestRunScreen` → сохранение `Record`
 - `CalibrationScreen.on_back` → `App._go_to_home()` — останавливает и уничтожает `CalibrationScreen`
 
 При каждом входе в калибровку создаётся **новый** `EyeTracker` и `CalibrationScreen` — полностью чистое состояние. При возврате на home экран калибровки уничтожается (`deleteLater()`), освобождая камеру и память.
+
+### Прохождение теста — навигация
+
+Flow через `App._stack`:
+1. "Пройти" на странице теста → экран готовности ("Готовы начать?")
+2. "Начать" → `CalibrationScreen` (fullscreen, с `on_finished` callback)
+3. Калибровка завершена → `CalibrationScreen.stop_ui_only()` (UI останавливается, трекер сохраняется)
+4. `TestRunScreen` получает откалиброванный трекер → последовательный показ изображений
+5. Все изображения показаны → `App._build_record()` → `RecordService.save()` → возврат на home
+6. `QMessageBox.information("Результат теста сохранён.")`
 
 ### Создание теста — навигация
 
@@ -461,8 +582,19 @@ Flow внутри `_content_stack` HomeScreen:
 3. "Редактировать" → `TestFormPage(mode=EDIT)` — редактирование
 4. "Сохранить" (успех) → `TestDao.update()`, остаётся на тесте в режиме VIEW
 5. "Удалить" → confirm dialog, `TestDao.delete()`, возврат в библиотеку, refresh
-6. "Использовать" / "Выгрузить Json" → заглушки (QMessageBox)
+6. "Выгрузить Json" → экспорт TEST.json через QFileDialog
 7. "← Назад" → возврат в библиотеку, refresh
+
+### История результатов — навигация
+
+Flow внутри `_content_stack` HomeScreen:
+```
+TestFormPage(VIEW) → [Результаты] → RecordsListPage → [Посмотреть] → RecordDetailPage
+                                         ↑ [Назад]                       ↑ [Назад]
+                                     TestFormPage                    RecordsListPage
+```
+
+ESC-клавиша работает как "Назад" на каждом уровне вложенности.
 
 ### Тема оформления — `theme.py`
 
@@ -471,6 +603,14 @@ Flow внутри `_content_stack` HomeScreen:
 ## UI калибровки — `calibration.py`
 
 Построен на PyQt6. `CalibrationScreen(QWidget)` — единый виджет с `paintEvent` для отрисовки через QPainter, `start()`/`stop()` для управления жизненным циклом.
+
+Поддерживает два режима:
+- **Демо-режим** — запускается из sidebar "Демо-трекер", по завершении возвращает на home
+- **Тестовый режим** — запускается при прохождении теста, по завершении вызывает `on_finished` callback и передаёт трекер в `TestRunScreen`
+
+Параметр `skip_calibration` пропускает фазу кликов по точкам (сразу переходит к measurement/gaze).
+
+Метод `stop_ui_only()` останавливает UI (таймеры, видео), но сохраняет `EyeTracker` живым для передачи в `TestRunScreen`.
 
 ### Фазы работы
 
@@ -558,7 +698,7 @@ def _update_video(self):
 
 ## Тестирование
 
-59 unit-тестов (`pytest`):
+95 unit-тестов (`pytest`):
 
 | Файл | Кол-во | Что проверяет |
 |------|--------|---------------|
@@ -566,10 +706,16 @@ def _update_video(self):
 | `test_regression.py` | 5 | _ridge, _get_eye_feats, add_data/predict для RidgeWeightedReg |
 | `test_blink.py` | 3 | Детекция моргания на серии кадров |
 | `test_precision.py` | 4 | PrecisionCalculator: хранение точек, расчёт precision |
-| `test_settings.py` | 4 | Settings: save/load, corrupted JSON fallback, default values |
+| `test_settings.py` | 9 | Settings: save/load, corrupted JSON fallback, default values, auth_token, skip_calibration, last_opened_test_id |
 | `test_monitor.py` | 4 | resolve_screen, format_screen_label |
 | `test_test_dao.py` | 15 | LocalTestDao: create, update, load_all, load, delete, corrupt JSON, уникальные ID |
 | `test_create_test_form.py` | 6 | validate_form: пустое имя, нет обложки, нет изображений, множественные ошибки |
+| `test_draft_cache.py` | 8 | DraftCache: save/load/clear, corrupted JSON, missing file |
+| `test_login_service.py` | 3 | LocalLoginService: успешный логин, возврат токена |
+| `test_metrics.py` | 5 | GazeMetricsAggregator: нормализация, группировка, пустые данные |
+| `test_record_service.py` | 8 | LocalRecordService: save/load, query с фильтрами, RecordSummary, user_login |
+| `test_report_export.py` | 3 | ZIP-экспорт: report.json, per-image JSON, количество файлов |
+| `test_time_fmt.py` | 4 | format_datetime: ISO 8601, timezone, невалидная строка |
 
 Запуск:
 ```bash
