@@ -98,14 +98,20 @@ class TestLibraryPage(QWidget):
         self._tests = self._dao.load_all()
         self._rebuild_grid()
 
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        self._update_cols()
+
     def resizeEvent(self, event) -> None:  # noqa: N802
-        scroll_w = self._scroll.viewport().width() if self._scroll.viewport() else self.width()
-        avail = scroll_w - 80  # account for margins
+        super().resizeEvent(event)
+        self._update_cols()
+
+    def _update_cols(self) -> None:
+        avail = self.width() - 80  # account for margins
         new_cols = max(1, (avail + TILE_GAP) // (TILE_W + TILE_GAP))
         if new_cols != self._cols:
             self._cols = new_cols
             self._rebuild_grid()
-        super().resizeEvent(event)
 
     def _rebuild_grid(self) -> None:
         layout = self._grid_layout
