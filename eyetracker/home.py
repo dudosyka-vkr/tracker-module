@@ -19,8 +19,11 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from eyetracker.create_test_form import CreateTestFormPage
+from eyetracker.create_test_page import CreateTestChoicePage
 from eyetracker.monitor import format_screen_label, get_available_screens
 from eyetracker.settings import Settings
+from eyetracker.test_dao import TestDao
 from eyetracker.theme import (
     BG_MAIN,
     BG_SIDEBAR,
@@ -42,6 +45,7 @@ _SIDEBAR_ITEMS = [
     {"id": "overview", "title": "Обзор", "icon": "⌂"},
     {"id": "devices", "title": "Устройства", "icon": "⎚"},
     {"id": "calibration", "title": "Калибровка", "icon": "◎"},
+    {"id": "create_test", "title": "Создать тест", "icon": "+"},
     {"id": "settings", "title": "Настройки", "icon": "⚙"},
     {"id": "help", "title": "Помощь", "icon": "?"},
 ]
@@ -54,12 +58,15 @@ class HomeScreen(QWidget):
         self,
         on_start_calibration: Callable[[], None],
         settings: Settings,
+        test_dao: TestDao,
         on_monitor_changed: Callable[[], None] | None = None,
     ):
         super().__init__()
         self._on_start = on_start_calibration
         self._settings = settings
         self._on_monitor_changed_cb = on_monitor_changed
+        self._test_dao = test_dao
+        self._create_test_form: CreateTestFormPage | None = None
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         layout = QHBoxLayout(self)
@@ -145,6 +152,8 @@ class HomeScreen(QWidget):
             return self._build_overview_page()
         if item_id == "calibration":
             return self._build_calibration_page()
+        if item_id == "create_test":
+            return self._build_create_test_page()
         if item_id == "settings":
             return self._build_settings_page()
         return self._build_placeholder_page(title)
@@ -313,6 +322,36 @@ class HomeScreen(QWidget):
         vbox.addWidget(desc)
 
         return page
+
+    # ---- Create test navigation -----------------------------------------------
+
+    def _build_create_test_page(self) -> QWidget:
+        page = CreateTestChoicePage()
+        page.form_chosen.connect(self._show_create_test_form)
+        return page
+
+    def _show_create_test_form(self) -> None:
+        if self._create_test_form is not None:
+            self._content_stack.removeWidget(self._create_test_form)
+            self._create_test_form.deleteLater()
+
+        self._create_test_form = CreateTestFormPage(dao=self._test_dao)
+        self._create_test_form.back_requested.connect(self._show_create_test_choice)
+        self._create_test_form.test_created.connect(self._on_test_created)
+        self._content_stack.addWidget(self._create_test_form)
+        self._content_stack.setCurrentWidget(self._create_test_form)
+
+    def _show_create_test_choice(self) -> None:
+        if self._create_test_form is not None:
+            self._content_stack.removeWidget(self._create_test_form)
+            self._create_test_form.deleteLater()
+            self._create_test_form = None
+        page = self._content_pages.get("create_test")
+        if page:
+            self._content_stack.setCurrentWidget(page)
+
+    def _on_test_created(self) -> None:
+        self._show_create_test_choice()
 
     # ---- Keys ----------------------------------------------------------------
 

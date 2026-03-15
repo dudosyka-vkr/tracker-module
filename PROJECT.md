@@ -14,15 +14,26 @@ eyetracker/
 │   ├── app.py                             # App — QMainWindow + QStackedWidget, навигация между экранами
 │   ├── home.py                            # HomeScreen — начальный экран (sidebar + контент)
 │   ├── theme.py                           # Константы стиля macOS (цвета, шрифты, размеры)
+│   ├── settings.py                        # Settings — JSON-хранилище настроек (~/.eyetracker/settings.json)
+│   ├── monitor.py                         # Выбор монитора для трекинга (resolve_screen, get_available_screens)
 │   ├── pipeline.py                        # Трекер, детекция моргания, регрессия, оркестратор
 │   ├── calibration.py                     # CalibrationScreen (PyQt6 QPainter) + измерение точности
 │   ├── util.py                            # Eye, DataWindow, KalmanFilter, обработка изображений
+│   ├── test_dao.py                        # TestData (dataclass) + TestDao (ABC) — интерфейс хранилища тестов
+│   ├── local_test_dao.py                  # LocalTestDao — локальная реализация: ~/.eyetracker/tests/<id>/
+│   ├── create_test_page.py                # CreateTestChoicePage — выбор способа создания теста (Форма / TEST.json)
+│   ├── create_test_form.py                # CreateTestFormPage — форма создания теста + валидация
+│   ├── image_grid.py                      # ImageGridWidget — плиточная галерея 16:9 с кнопкой "+"
 │   └── models/                            # Автоматически скачиваемая модель (face_landmarker.task)
 └── tests/
     ├── test_util.py                       # 18 тестов
     ├── test_regression.py                 # 5 тестов
     ├── test_blink.py                      # 3 теста
-    └── test_precision.py                  # 4 теста
+    ├── test_precision.py                  # 4 теста
+    ├── test_settings.py                   # 4 теста
+    ├── test_monitor.py                    # 4 теста
+    ├── test_test_dao.py                   # 12 тестов
+    └── test_create_test_form.py           # 6 тестов
 ```
 
 ## Зависимости
@@ -340,14 +351,72 @@ def calculate_precision(self, target_x: float, target_y: float) -> float:
     return round(precision, 2)
 ```
 
+### 7. Настройки — `settings.py`
+
+JSON-хранилище настроек приложения в `~/.eyetracker/settings.json`. Текущие настройки:
+- `tracking_display_name` — имя монитора для трекинга (`None` = основной)
+
+### 8. Выбор монитора — `monitor.py`
+
+Утилиты для работы с мониторами:
+- `get_available_screens()` — список доступных экранов через `QApplication.screens()`
+- `resolve_screen(name)` — найти экран по имени, fallback на primary
+- `format_screen_label(screen)` — форматирование строки для combo box
+
+### 9. Хранилище тестов — `test_dao.py`, `local_test_dao.py`
+
+Абстрактный интерфейс `TestDao` (ABC) с методами `create`, `load_all`, `load`, `delete`, `get_cover_path`, `get_image_path`. Позволяет подменять реализацию (локальная ↔ удалённая).
+
+**`LocalTestDao`** — реализация для локальной файловой системы:
+
+```
+~/.eyetracker/tests/
+├── tests.json              # метаданные [{id, name, cover_filename, image_filenames}]
+├── <uuid-1>/
+│   ├── cover.jpg           # обложка (оригинальное расширение)
+│   ├── 001.png             # изображения (нумерация + расширение)
+│   └── 002.jpg
+└── <uuid-2>/
+    └── ...
+```
+
+При вызове `create()` файлы **копируются** из оригинального местоположения в директорию теста. Метаданные хранят только относительные имена файлов.
+
+### 10. Создание теста — UI
+
+- **`CreateTestChoicePage`** (`create_test_page.py`) — две карточки: "Форма" (создание через UI) и "TEST.json" (заглушка)
+- **`CreateTestFormPage`** (`create_test_form.py`) — форма с полями: название (QLineEdit), обложка (кликабельный QPushButton-превью), галерея изображений (ImageGridWidget)
+- **`ImageGridWidget`** (`image_grid.py`) — плиточная галерея с кнопкой "+" первой; плитки 16:9 (280×158), left-aligned
+- Валидация: inline (под каждым полем) + финальная при "Создать"
+- File picker с фильтром `*.png *.jpg *.jpeg *.bmp *.gif *.webp` + пост-валидация через `QPixmap.isNull()`
+
 ---
 
 ## Навигация между экранами — `app.py`
 
 Приложение использует `QStackedWidget` для переключения между экранами:
 
-- **HomeScreen** (`home.py`) — начальный экран с sidebar (macOS-стиль) и кнопкой "Начать калибровку"
+- **HomeScreen** (`home.py`) — начальный экран с sidebar (macOS-стиль) и контентными страницами
 - **CalibrationScreen** (`calibration.py`) — полноэкранная калибровка с QPainter
+
+### Sidebar (боковое меню)
+
+Пункты sidebar в `home.py`:
+
+| Пункт | ID | Описание |
+|-------|----|----------|
+| Обзор | `overview` | Главная страница приложения |
+| Устройства | `devices` | Заглушка (скоро) |
+| Калибровка | `calibration` | Запуск калибровки (fullscreen) |
+| Создать тест | `create_test` | Создание теста через форму или TEST.json |
+| Настройки | `settings` | Выбор монитора для трекинга |
+| Помощь | `help` | Заглушка (скоро) |
+
+### Dependency Injection
+
+`App` создаёт зависимости и передаёт их вниз:
+- `Settings` → `HomeScreen` (настройки монитора)
+- `LocalTestDao` → `HomeScreen` → `CreateTestFormPage` (хранение тестов)
 
 Навигация через коллбеки:
 - `HomeScreen.on_start_calibration` → `App._go_to_calibration()` — создаёт новый `EyeTracker` + `CalibrationScreen`
@@ -355,9 +424,17 @@ def calculate_precision(self, target_x: float, target_y: float) -> float:
 
 При каждом входе в калибровку создаётся **новый** `EyeTracker` и `CalibrationScreen` — полностью чистое состояние. При возврате на home экран калибровки уничтожается (`deleteLater()`), освобождая камеру и память.
 
+### Создание теста — навигация
+
+Flow внутри `_content_stack` HomeScreen:
+1. Sidebar → `CreateTestChoicePage` (две карточки: Форма / TEST.json)
+2. Клик "Форма" → `CreateTestFormPage` добавляется в стек
+3. "Назад" → возврат к `CreateTestChoicePage`, форма удаляется
+4. "Создать" (успех) → файлы копируются через `TestDao.create()`, возврат к выбору
+
 ### Тема оформления — `theme.py`
 
-Централизованные константы стиля macOS (тёмная тема): цвета фона, текста, кнопок, размеры sidebar, шрифты.
+Централизованные константы стиля macOS (тёмная тема): цвета фона, текста, кнопок, ошибок, карточек, размеры sidebar, плиток галереи, шрифты. Глобальный stylesheet для `QMessageBox` с белым текстом на тёмном фоне задаётся в `app.py`.
 
 ## UI калибровки — `calibration.py`
 
@@ -449,7 +526,7 @@ def _update_video(self):
 
 ## Тестирование
 
-30 unit-тестов (`pytest`):
+56 unit-тестов (`pytest`):
 
 | Файл | Кол-во | Что проверяет |
 |------|--------|---------------|
@@ -457,6 +534,10 @@ def _update_video(self):
 | `test_regression.py` | 5 | _ridge, _get_eye_feats, add_data/predict для RidgeWeightedReg |
 | `test_blink.py` | 3 | Детекция моргания на серии кадров |
 | `test_precision.py` | 4 | PrecisionCalculator: хранение точек, расчёт precision |
+| `test_settings.py` | 4 | Settings: save/load, corrupted JSON fallback, default values |
+| `test_monitor.py` | 4 | resolve_screen, format_screen_label |
+| `test_test_dao.py` | 12 | LocalTestDao: create с копированием файлов, load_all, load, delete, corrupt JSON, уникальные ID |
+| `test_create_test_form.py` | 6 | validate_form: пустое имя, нет обложки, нет изображений, множественные ошибки |
 
 Запуск:
 ```bash

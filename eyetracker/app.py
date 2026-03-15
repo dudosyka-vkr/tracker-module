@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import QApplication, QMainWindow, QStackedWidget
 
 from eyetracker.calibration import CalibrationScreen
 from eyetracker.home import HomeScreen
+from eyetracker.local_test_dao import LocalTestDao
 from eyetracker.monitor import resolve_screen
 from eyetracker.pipeline import EyeTracker
 from eyetracker.settings import Settings
@@ -19,7 +20,21 @@ class App:
 
     def __init__(self):
         self._qt_app = QApplication.instance() or QApplication(sys.argv)
+        self._qt_app.setStyleSheet("""
+            QMessageBox { background-color: #2a2a2a; }
+            QMessageBox QLabel { color: #ffffff; }
+            QMessageBox QPushButton {
+                color: #ffffff;
+                background-color: #3a3a3a;
+                border: 1px solid #4a4a4a;
+                border-radius: 6px;
+                padding: 4px 16px;
+                min-width: 60px;
+            }
+            QMessageBox QPushButton:hover { background-color: #4a4a4a; }
+        """)
         self._settings = Settings()
+        self._test_dao = LocalTestDao()
 
         self._window = QMainWindow()
         self._window.setWindowTitle("EyeTracker")
@@ -30,6 +45,7 @@ class App:
         self._home = HomeScreen(
             on_start_calibration=self._go_to_calibration,
             settings=self._settings,
+            test_dao=self._test_dao,
             on_monitor_changed=self._move_to_target_screen,
         )
         self._calibration: CalibrationScreen | None = None
