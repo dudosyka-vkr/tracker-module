@@ -36,6 +36,10 @@ class TestDao(ABC):
         """Load a test by ID."""
 
     @abstractmethod
+    def update(self, test_id: str, name: str, cover_src: Path, image_srcs: list[Path]) -> TestData:
+        """Update a test: replace files in storage, update metadata."""
+
+    @abstractmethod
     def delete(self, test_id: str) -> None:
         """Delete a test and its files."""
 

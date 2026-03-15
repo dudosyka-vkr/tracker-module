@@ -121,3 +121,31 @@ def test_cover_preserves_extension(dao: LocalTestDao, sample_jpg: Path):
 def test_image_filenames_numbered(dao: LocalTestDao, sample_image: Path):
     test = dao.create("Num", cover_src=sample_image, image_srcs=[sample_image, sample_image, sample_image])
     assert test.image_filenames == ["001.png", "002.png", "003.png"]
+
+
+def test_update_changes_name(dao: LocalTestDao, sample_image: Path):
+    test = dao.create("Old", cover_src=sample_image, image_srcs=[sample_image])
+    updated = dao.update(test.id, "New", cover_src=sample_image, image_srcs=[sample_image])
+    assert updated.name == "New"
+    assert updated.id == test.id
+    loaded = dao.load(test.id)
+    assert loaded is not None
+    assert loaded.name == "New"
+
+
+def test_update_replaces_files(dao: LocalTestDao, sample_image: Path, sample_jpg: Path):
+    test = dao.create("T", cover_src=sample_image, image_srcs=[sample_image])
+    updated = dao.update(test.id, "T", cover_src=sample_jpg, image_srcs=[sample_jpg, sample_jpg])
+    assert updated.cover_filename == "cover.jpg"
+    assert len(updated.image_filenames) == 2
+    assert dao.get_cover_path(updated).is_file()
+
+
+def test_update_preserves_other_tests(dao: LocalTestDao, sample_image: Path):
+    t1 = dao.create("A", cover_src=sample_image, image_srcs=[sample_image])
+    t2 = dao.create("B", cover_src=sample_image, image_srcs=[sample_image])
+    dao.update(t1.id, "A2", cover_src=sample_image, image_srcs=[sample_image])
+    all_tests = dao.load_all()
+    assert len(all_tests) == 2
+    names = {t.name for t in all_tests}
+    assert names == {"A2", "B"}

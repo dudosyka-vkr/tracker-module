@@ -1,12 +1,13 @@
-"""Form page for creating a new test."""
+"""Unified form page for creating, viewing, and editing a test."""
 
 from __future__ import annotations
 
 import logging
+from enum import Enum, auto
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QFont, QPixmap
+from PyQt6.QtCore import QSize, Qt, pyqtSignal
+from PyQt6.QtGui import QFont, QIcon, QPixmap
 from PyQt6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
@@ -20,7 +21,7 @@ from PyQt6.QtWidgets import (
 )
 
 from eyetracker.image_grid import ImageGridWidget
-from eyetracker.test_dao import TestDao
+from eyetracker.test_dao import TestDao, TestData
 from eyetracker.theme import (
     BG_MAIN,
     BG_SIDEBAR,
@@ -37,6 +38,12 @@ from eyetracker.theme import (
 logger = logging.getLogger(__name__)
 
 _IMAGE_FILTER = "Изображения (*.png *.jpg *.jpeg *.bmp *.gif *.webp)"
+
+
+class FormMode(Enum):
+    CREATE = auto()
+    VIEW = auto()
+    EDIT = auto()
 
 
 def validate_form(
@@ -66,15 +73,26 @@ def pick_image(parent: QWidget) -> str | None:
     return path
 
 
-class CreateTestFormPage(QWidget):
-    """Form for creating a test: name, cover, image gallery, 'Create' button."""
+class TestFormPage(QWidget):
+    """Form for creating / viewing / editing a test."""
 
     back_requested = pyqtSignal()
     test_created = pyqtSignal()
+    test_updated = pyqtSignal()
+    test_deleted = pyqtSignal()
+    edit_requested = pyqtSignal()
 
-    def __init__(self, dao: TestDao, parent: QWidget | None = None):
+    def __init__(
+        self,
+        dao: TestDao,
+        mode: FormMode = FormMode.CREATE,
+        test_data: TestData | None = None,
+        parent: QWidget | None = None,
+    ):
         super().__init__(parent)
         self._dao = dao
+        self._mode = mode
+        self._test_data = test_data
         self._cover_path: str | None = None
         self.setStyleSheet(f"background-color: {BG_MAIN};")
 
@@ -104,6 +122,10 @@ class CreateTestFormPage(QWidget):
         scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
         root.addWidget(scroll)
 
+        # -- populate data for view/edit -------------------------------------
+        if test_data is not None and mode in (FormMode.VIEW, FormMode.EDIT):
+            self._populate(test_data)
+
     # -- top bar -------------------------------------------------------------
 
     def _build_top_bar(self) -> QWidget:
@@ -128,16 +150,36 @@ class CreateTestFormPage(QWidget):
         """)
         back_btn.clicked.connect(self.back_requested.emit)
 
-        title = QLabel("Создание теста")
+        titles = {
+            FormMode.CREATE: "Создание теста",
+            FormMode.VIEW: "Просмотр теста",
+            FormMode.EDIT: "Редактирование теста",
+        }
+        title = QLabel(titles[self._mode])
         title.setFont(QFont(FONT_FAMILY, 16, QFont.Weight.Bold))
         title.setStyleSheet(f"color: {TEXT_PRIMARY}; background: transparent;")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        create_btn = QPushButton("Создать")
-        create_btn.setFixedSize(110, 34)
-        create_btn.setFont(QFont(FONT_FAMILY, 13, QFont.Weight.Bold))
-        create_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        create_btn.setStyleSheet(f"""
+        layout.addWidget(back_btn)
+        layout.addStretch()
+        layout.addWidget(title)
+        layout.addStretch()
+
+        if self._mode == FormMode.CREATE:
+            layout.addWidget(self._make_action_button("Создать", self._on_create_clicked))
+        elif self._mode == FormMode.EDIT:
+            layout.addWidget(self._make_action_button("Сохранить", self._on_save_clicked))
+        elif self._mode == FormMode.VIEW:
+            self._build_view_actions(layout)
+
+        return bar
+
+    def _make_action_button(self, text: str, handler) -> QPushButton:
+        btn = QPushButton(text)
+        btn.setFixedSize(120, 34)
+        btn.setFont(QFont(FONT_FAMILY, 13, QFont.Weight.Bold))
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: {BUTTON_BG};
                 color: white;
@@ -148,14 +190,51 @@ class CreateTestFormPage(QWidget):
                 background-color: {BUTTON_HOVER};
             }}
         """)
-        create_btn.clicked.connect(self._on_create_clicked)
+        btn.clicked.connect(handler)
+        return btn
 
-        layout.addWidget(back_btn)
-        layout.addStretch()
-        layout.addWidget(title)
-        layout.addStretch()
-        layout.addWidget(create_btn)
-        return bar
+    def _build_view_actions(self, layout: QHBoxLayout) -> None:
+        actions = [
+            ("Редактировать", self._on_edit_clicked),
+            ("Использовать", self._on_use_clicked),
+            ("Выгрузить Json", self._on_export_clicked),
+            ("Удалить", self._on_delete_clicked),
+        ]
+        for text, handler in actions:
+            btn = QPushButton(text)
+            btn.setFixedHeight(34)
+            btn.setFont(QFont(FONT_FAMILY, 12))
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            if text == "Удалить":
+                btn.setStyleSheet(f"""
+                    QPushButton {{
+                        background-color: transparent;
+                        color: {ERROR_COLOR};
+                        border: 1px solid {ERROR_COLOR};
+                        border-radius: {CORNER_RADIUS}px;
+                        padding: 0 14px;
+                    }}
+                    QPushButton:hover {{
+                        background-color: {ERROR_COLOR};
+                        color: white;
+                    }}
+                """)
+            else:
+                btn.setStyleSheet(f"""
+                    QPushButton {{
+                        background-color: transparent;
+                        color: {BUTTON_BG};
+                        border: 1px solid {BUTTON_BG};
+                        border-radius: {CORNER_RADIUS}px;
+                        padding: 0 14px;
+                    }}
+                    QPushButton:hover {{
+                        background-color: {BUTTON_BG};
+                        color: white;
+                    }}
+                """)
+            btn.clicked.connect(handler)
+            layout.addWidget(btn)
 
     # -- name section --------------------------------------------------------
 
@@ -181,6 +260,9 @@ class CreateTestFormPage(QWidget):
             }}
         """)
 
+        if self._mode == FormMode.VIEW:
+            self._name_edit.setReadOnly(True)
+
         self._name_error = self._make_error_label()
 
         parent_layout.addWidget(label)
@@ -198,7 +280,6 @@ class CreateTestFormPage(QWidget):
 
         self._cover_preview = QPushButton()
         self._cover_preview.setFixedSize(200, 200)
-        self._cover_preview.setCursor(Qt.CursorShape.PointingHandCursor)
         self._cover_preview.setFont(QFont(FONT_FAMILY, 12))
         self._cover_preview.setText("Нет обложки\n\nНажмите для выбора")
         self._cover_preview.setStyleSheet(f"""
@@ -212,7 +293,12 @@ class CreateTestFormPage(QWidget):
                 border-color: {TEXT_SECONDARY};
             }}
         """)
-        self._cover_preview.clicked.connect(self._on_choose_cover)
+
+        if self._mode == FormMode.VIEW:
+            self._cover_preview.setEnabled(False)
+        else:
+            self._cover_preview.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._cover_preview.clicked.connect(self._on_choose_cover)
 
         self._cover_error = self._make_error_label()
 
@@ -229,7 +315,8 @@ class CreateTestFormPage(QWidget):
         label.setFont(QFont(FONT_FAMILY, 14, QFont.Weight.Bold))
         label.setStyleSheet(f"color: {TEXT_PRIMARY}; background: transparent;")
 
-        self._image_grid = ImageGridWidget()
+        readonly = self._mode == FormMode.VIEW
+        self._image_grid = ImageGridWidget(readonly=readonly)
         self._image_grid.add_clicked.connect(self._on_add_image)
 
         self._images_error = self._make_error_label()
@@ -240,20 +327,24 @@ class CreateTestFormPage(QWidget):
         parent_layout.addSpacing(4)
         parent_layout.addWidget(self._images_error)
 
-    # -- actions -------------------------------------------------------------
+    # -- populate from existing test -----------------------------------------
 
-    def _on_choose_cover(self) -> None:
-        path = pick_image(self)
-        if path is None:
-            return
+    def _populate(self, test: TestData) -> None:
+        self._name_edit.setText(test.name)
+
+        cover_path = str(self._dao.get_cover_path(test))
+        self._set_cover_display(cover_path)
+
+        image_paths = [str(self._dao.get_image_path(test, f)) for f in test.image_filenames]
+        self._image_grid.set_images(image_paths)
+
+    def _set_cover_display(self, path: str) -> None:
         self._cover_path = path
         pm = QPixmap(path).scaled(
             200, 200,
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation,
         )
-        from PyQt6.QtCore import QSize
-        from PyQt6.QtGui import QIcon
         self._cover_preview.setText("")
         self._cover_preview.setIcon(QIcon(pm))
         self._cover_preview.setIconSize(QSize(196, 196))
@@ -267,6 +358,14 @@ class CreateTestFormPage(QWidget):
                 border-color: {TEXT_SECONDARY};
             }}
         """)
+
+    # -- actions -------------------------------------------------------------
+
+    def _on_choose_cover(self) -> None:
+        path = pick_image(self)
+        if path is None:
+            return
+        self._set_cover_display(path)
         self._cover_error.setVisible(False)
 
     def _on_add_image(self) -> None:
@@ -299,6 +398,57 @@ class CreateTestFormPage(QWidget):
         except OSError as exc:
             logger.error("Failed to create test: %s", exc)
             QMessageBox.warning(self, "Ошибка", f"Не удалось сохранить тест: {exc}")
+
+    def _on_save_clicked(self) -> None:
+        errors = validate_form(
+            self._name_edit.text(),
+            self._cover_path,
+            self._image_grid.get_image_paths(),
+        )
+        self._show_errors(errors)
+        if errors:
+            return
+
+        try:
+            self._dao.update(
+                test_id=self._test_data.id,  # type: ignore[union-attr]
+                name=self._name_edit.text().strip(),
+                cover_src=Path(self._cover_path),  # type: ignore[arg-type]
+                image_srcs=[Path(p) for p in self._image_grid.get_image_paths()],
+            )
+            QMessageBox.information(self, "Успех", "Тест успешно сохранён")
+            self.test_updated.emit()
+        except OSError as exc:
+            logger.error("Failed to update test: %s", exc)
+            QMessageBox.warning(self, "Ошибка", f"Не удалось сохранить тест: {exc}")
+
+    def _on_edit_clicked(self) -> None:
+        self.edit_requested.emit()
+
+    def _on_use_clicked(self) -> None:
+        QMessageBox.information(self, "Использовать", "Скоро будет доступно")
+
+    def _on_export_clicked(self) -> None:
+        QMessageBox.information(self, "Выгрузить Json", "Скоро будет доступно")
+
+    def _on_delete_clicked(self) -> None:
+        if self._test_data is None:
+            return
+        reply = QMessageBox.question(
+            self,
+            "Удалить тест",
+            f"Удалить тест «{self._test_data.name}»?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            self._dao.delete(self._test_data.id)
+            self.test_deleted.emit()
+        except OSError as exc:
+            logger.error("Failed to delete test: %s", exc)
+            QMessageBox.warning(self, "Ошибка", f"Не удалось удалить тест: {exc}")
 
     # -- validation display --------------------------------------------------
 

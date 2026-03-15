@@ -19,8 +19,9 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from eyetracker.create_test_form import CreateTestFormPage
 from eyetracker.create_test_page import CreateTestChoicePage
+from eyetracker.test_form_page import FormMode, TestFormPage
+from eyetracker.test_library_page import TestLibraryPage
 from eyetracker.monitor import format_screen_label, get_available_screens
 from eyetracker.settings import Settings
 from eyetracker.test_dao import TestDao
@@ -45,6 +46,7 @@ _SIDEBAR_ITEMS = [
     {"id": "overview", "title": "Обзор", "icon": "⌂"},
     {"id": "devices", "title": "Устройства", "icon": "⎚"},
     {"id": "calibration", "title": "Калибровка", "icon": "◎"},
+    {"id": "tests", "title": "Тесты", "icon": "☰"},
     {"id": "create_test", "title": "Создать тест", "icon": "+"},
     {"id": "settings", "title": "Настройки", "icon": "⚙"},
     {"id": "help", "title": "Помощь", "icon": "?"},
@@ -66,7 +68,7 @@ class HomeScreen(QWidget):
         self._settings = settings
         self._on_monitor_changed_cb = on_monitor_changed
         self._test_dao = test_dao
-        self._create_test_form: CreateTestFormPage | None = None
+        self._detail_page: TestFormPage | None = None
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         layout = QHBoxLayout(self)
@@ -141,6 +143,10 @@ class HomeScreen(QWidget):
     def _on_sidebar_click(self, item_id: str):
         if item_id == "settings":
             self._refresh_monitor_combo()
+        if item_id == "tests":
+            page = self._content_pages.get("tests")
+            if isinstance(page, TestLibraryPage):
+                page.refresh()
         page = self._content_pages.get(item_id)
         if page:
             self._content_stack.setCurrentWidget(page)
@@ -152,6 +158,8 @@ class HomeScreen(QWidget):
             return self._build_overview_page()
         if item_id == "calibration":
             return self._build_calibration_page()
+        if item_id == "tests":
+            return self._build_tests_page()
         if item_id == "create_test":
             return self._build_create_test_page()
         if item_id == "settings":
@@ -323,7 +331,41 @@ class HomeScreen(QWidget):
 
         return page
 
-    # ---- Create test navigation -----------------------------------------------
+    # ---- Tests library navigation ---------------------------------------------
+
+    def _build_tests_page(self) -> QWidget:
+        page = TestLibraryPage(dao=self._test_dao)
+        page.test_selected.connect(self._show_test_detail)
+        return page
+
+    def _show_test_detail(self, test_id: str, mode: FormMode = FormMode.VIEW) -> None:
+        self._remove_detail_page()
+        test = self._test_dao.load(test_id)
+        if test is None:
+            return
+        self._detail_page = TestFormPage(dao=self._test_dao, mode=mode, test_data=test)
+        self._detail_page.back_requested.connect(self._back_to_tests)
+        self._detail_page.edit_requested.connect(lambda tid=test_id: self._show_test_detail(tid, FormMode.EDIT))
+        self._detail_page.test_updated.connect(lambda tid=test_id: self._show_test_detail(tid, FormMode.VIEW))
+        self._detail_page.test_deleted.connect(self._back_to_tests)
+        self._content_stack.addWidget(self._detail_page)
+        self._content_stack.setCurrentWidget(self._detail_page)
+
+    def _back_to_tests(self) -> None:
+        self._remove_detail_page()
+        page = self._content_pages.get("tests")
+        if isinstance(page, TestLibraryPage):
+            page.refresh()
+        if page:
+            self._content_stack.setCurrentWidget(page)
+
+    def _remove_detail_page(self) -> None:
+        if self._detail_page is not None:
+            self._content_stack.removeWidget(self._detail_page)
+            self._detail_page.deleteLater()
+            self._detail_page = None
+
+    # ---- Create test navigation ---------------------------------------------
 
     def _build_create_test_page(self) -> QWidget:
         page = CreateTestChoicePage()
@@ -331,21 +373,15 @@ class HomeScreen(QWidget):
         return page
 
     def _show_create_test_form(self) -> None:
-        if self._create_test_form is not None:
-            self._content_stack.removeWidget(self._create_test_form)
-            self._create_test_form.deleteLater()
-
-        self._create_test_form = CreateTestFormPage(dao=self._test_dao)
-        self._create_test_form.back_requested.connect(self._show_create_test_choice)
-        self._create_test_form.test_created.connect(self._on_test_created)
-        self._content_stack.addWidget(self._create_test_form)
-        self._content_stack.setCurrentWidget(self._create_test_form)
+        self._remove_detail_page()
+        self._detail_page = TestFormPage(dao=self._test_dao, mode=FormMode.CREATE)
+        self._detail_page.back_requested.connect(self._show_create_test_choice)
+        self._detail_page.test_created.connect(self._on_test_created)
+        self._content_stack.addWidget(self._detail_page)
+        self._content_stack.setCurrentWidget(self._detail_page)
 
     def _show_create_test_choice(self) -> None:
-        if self._create_test_form is not None:
-            self._content_stack.removeWidget(self._create_test_form)
-            self._create_test_form.deleteLater()
-            self._create_test_form = None
+        self._remove_detail_page()
         page = self._content_pages.get("create_test")
         if page:
             self._content_stack.setCurrentWidget(page)

@@ -63,6 +63,34 @@ class LocalTestDao(TestDao):
     def load(self, test_id: str) -> TestData | None:
         return next((t for t in self.load_all() if t.id == test_id), None)
 
+    def update(self, test_id: str, name: str, cover_src: Path, image_srcs: list[Path]) -> TestData:
+        test_dir = self._base / test_id
+        tmp_dir = self._base / f"{test_id}_tmp"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+
+        cover_filename = f"cover{cover_src.suffix}"
+        shutil.copy2(cover_src, tmp_dir / cover_filename)
+
+        image_filenames: list[str] = []
+        for i, src in enumerate(image_srcs, start=1):
+            fname = f"{i:03d}{src.suffix}"
+            shutil.copy2(src, tmp_dir / fname)
+            image_filenames.append(fname)
+
+        if test_dir.is_dir():
+            shutil.rmtree(test_dir)
+        tmp_dir.rename(test_dir)
+
+        updated = TestData(
+            id=test_id,
+            name=name,
+            cover_filename=cover_filename,
+            image_filenames=image_filenames,
+        )
+        tests = [updated if t.id == test_id else t for t in self.load_all()]
+        self._save_meta(tests)
+        return updated
+
     def delete(self, test_id: str) -> None:
         tests = [t for t in self.load_all() if t.id != test_id]
         self._save_meta(tests)

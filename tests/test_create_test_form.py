@@ -1,6 +1,6 @@
-"""Tests for create_test_form validation."""
+"""Tests for test form validation."""
 
-from eyetracker.create_test_form import validate_form
+from eyetracker.test_form_page import validate_form
 
 
 def test_validate_empty_name():

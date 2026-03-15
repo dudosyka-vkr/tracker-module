@@ -22,8 +22,9 @@ eyetracker/
 │   ├── test_dao.py                        # TestData (dataclass) + TestDao (ABC) — интерфейс хранилища тестов
 │   ├── local_test_dao.py                  # LocalTestDao — локальная реализация: ~/.eyetracker/tests/<id>/
 │   ├── create_test_page.py                # CreateTestChoicePage — выбор способа создания теста (Форма / TEST.json)
-│   ├── create_test_form.py                # CreateTestFormPage — форма создания теста + валидация
-│   ├── image_grid.py                      # ImageGridWidget — плиточная галерея 16:9 с кнопкой "+"
+│   ├── test_form_page.py                  # TestFormPage — форма создания/просмотра/редактирования теста + валидация
+│   ├── test_library_page.py               # TestLibraryPage — библиотека тестов (grid плиток с обложками)
+│   ├── image_grid.py                      # ImageGridWidget — галерея 16:9, drag-to-reorder, удаление, превью, readonly
 │   └── models/                            # Автоматически скачиваемая модель (face_landmarker.task)
 └── tests/
     ├── test_util.py                       # 18 тестов
@@ -32,7 +33,7 @@ eyetracker/
     ├── test_precision.py                  # 4 теста
     ├── test_settings.py                   # 4 теста
     ├── test_monitor.py                    # 4 теста
-    ├── test_test_dao.py                   # 12 тестов
+    ├── test_test_dao.py                   # 15 тестов
     └── test_create_test_form.py           # 6 тестов
 ```
 
@@ -365,7 +366,7 @@ JSON-хранилище настроек приложения в `~/.eyetracker/
 
 ### 9. Хранилище тестов — `test_dao.py`, `local_test_dao.py`
 
-Абстрактный интерфейс `TestDao` (ABC) с методами `create`, `load_all`, `load`, `delete`, `get_cover_path`, `get_image_path`. Позволяет подменять реализацию (локальная ↔ удалённая).
+Абстрактный интерфейс `TestDao` (ABC) с методами `create`, `update`, `load_all`, `load`, `delete`, `get_cover_path`, `get_image_path`. Позволяет подменять реализацию (локальная ↔ удалённая).
 
 **`LocalTestDao`** — реализация для локальной файловой системы:
 
@@ -380,15 +381,29 @@ JSON-хранилище настроек приложения в `~/.eyetracker/
     └── ...
 ```
 
-При вызове `create()` файлы **копируются** из оригинального местоположения в директорию теста. Метаданные хранят только относительные имена файлов.
+При вызове `create()` файлы **копируются** из оригинального местоположения в директорию теста. Метаданные хранят только относительные имена файлов. При `update()` файлы сначала копируются во временную директорию (`<id>_tmp`), затем старая удаляется и tmp переименовывается — это позволяет безопасно обновлять тест, даже если источники указывают на файлы внутри самого теста.
 
 ### 10. Создание теста — UI
 
 - **`CreateTestChoicePage`** (`create_test_page.py`) — две карточки: "Форма" (создание через UI) и "TEST.json" (заглушка)
-- **`CreateTestFormPage`** (`create_test_form.py`) — форма с полями: название (QLineEdit), обложка (кликабельный QPushButton-превью), галерея изображений (ImageGridWidget)
-- **`ImageGridWidget`** (`image_grid.py`) — плиточная галерея с кнопкой "+" первой; плитки 16:9 (280×158), left-aligned
-- Валидация: inline (под каждым полем) + финальная при "Создать"
+- **`TestFormPage`** (`test_form_page.py`) — универсальная форма с тремя режимами (`FormMode.CREATE`, `VIEW`, `EDIT`):
+  - **CREATE**: пустая форма, кнопка "Создать", запись через `TestDao.create()`
+  - **VIEW**: pre-populated readonly, поля заблокированы, нет кнопки "+", кнопки действий: Редактировать / Использовать / Выгрузить Json / Удалить
+  - **EDIT**: pre-populated editable, кнопка "Сохранить", запись через `TestDao.update()`
+- **`ImageGridWidget`** (`image_grid.py`) — плиточная галерея с кнопкой "+" первой; плитки 16:9 (280×158), left-aligned, поддержка readonly режима:
+  - **Drag-to-reorder**: Qt Native Drag & Drop (`QDrag` + `QMimeData`) для перестановки изображений в edit/create mode; полупрозрачный thumbnail при перетаскивании, подсветка целевой позиции
+  - **Удаление**: красная кнопка "✕" в правом верхнем углу каждого тайла (edit/create mode)
+  - **Превью**: клик по тайлу открывает `ImagePreviewOverlay` — полноэкранный тёмный оверлей с изображением на 70% ширины; закрытие по кнопке "✕", Esc, клику вне изображения
+  - **Readonly**: в VIEW mode скрыты "+" и "✕", drag отключён, клик по тайлу открывает превью
+- Валидация: inline (под каждым полем) + финальная при "Создать"/"Сохранить"
 - File picker с фильтром `*.png *.jpg *.jpeg *.bmp *.gif *.webp` + пост-валидация через `QPixmap.isNull()`
+
+### 11. Библиотека тестов — `test_library_page.py`
+
+- **`TestLibraryPage`** — grid плиток со всеми тестами (обложка + название)
+- Empty state при отсутствии тестов
+- Клик по плитке → сигнал `test_selected(test_id)` → открытие в режиме просмотра
+- `refresh()` — перезагрузка из DAO (вызывается при переключении на вкладку, после создания/удаления/редактирования)
 
 ---
 
@@ -408,6 +423,7 @@ JSON-хранилище настроек приложения в `~/.eyetracker/
 | Обзор | `overview` | Главная страница приложения |
 | Устройства | `devices` | Заглушка (скоро) |
 | Калибровка | `calibration` | Запуск калибровки (fullscreen) |
+| Тесты | `tests` | Библиотека тестов (grid → просмотр → редактирование) |
 | Создать тест | `create_test` | Создание теста через форму или TEST.json |
 | Настройки | `settings` | Выбор монитора для трекинга |
 | Помощь | `help` | Заглушка (скоро) |
@@ -416,7 +432,7 @@ JSON-хранилище настроек приложения в `~/.eyetracker/
 
 `App` создаёт зависимости и передаёт их вниз:
 - `Settings` → `HomeScreen` (настройки монитора)
-- `LocalTestDao` → `HomeScreen` → `CreateTestFormPage` (хранение тестов)
+- `LocalTestDao` → `HomeScreen` → `TestFormPage` / `TestLibraryPage` (хранение тестов)
 
 Навигация через коллбеки:
 - `HomeScreen.on_start_calibration` → `App._go_to_calibration()` — создаёт новый `EyeTracker` + `CalibrationScreen`
@@ -428,9 +444,20 @@ JSON-хранилище настроек приложения в `~/.eyetracker/
 
 Flow внутри `_content_stack` HomeScreen:
 1. Sidebar → `CreateTestChoicePage` (две карточки: Форма / TEST.json)
-2. Клик "Форма" → `CreateTestFormPage` добавляется в стек
+2. Клик "Форма" → `TestFormPage(mode=CREATE)` добавляется в стек
 3. "Назад" → возврат к `CreateTestChoicePage`, форма удаляется
 4. "Создать" (успех) → файлы копируются через `TestDao.create()`, возврат к выбору
+
+### Библиотека тестов — навигация
+
+Flow внутри `_content_stack` HomeScreen:
+1. Sidebar "Тесты" → `TestLibraryPage` (grid плиток, auto-refresh)
+2. Клик по плитке → `TestFormPage(mode=VIEW)` — просмотр (readonly)
+3. "Редактировать" → `TestFormPage(mode=EDIT)` — редактирование
+4. "Сохранить" (успех) → `TestDao.update()`, остаётся на тесте в режиме VIEW
+5. "Удалить" → confirm dialog, `TestDao.delete()`, возврат в библиотеку, refresh
+6. "Использовать" / "Выгрузить Json" → заглушки (QMessageBox)
+7. "← Назад" → возврат в библиотеку, refresh
 
 ### Тема оформления — `theme.py`
 
@@ -526,7 +553,7 @@ def _update_video(self):
 
 ## Тестирование
 
-56 unit-тестов (`pytest`):
+59 unit-тестов (`pytest`):
 
 | Файл | Кол-во | Что проверяет |
 |------|--------|---------------|
@@ -536,7 +563,7 @@ def _update_video(self):
 | `test_precision.py` | 4 | PrecisionCalculator: хранение точек, расчёт precision |
 | `test_settings.py` | 4 | Settings: save/load, corrupted JSON fallback, default values |
 | `test_monitor.py` | 4 | resolve_screen, format_screen_label |
-| `test_test_dao.py` | 12 | LocalTestDao: create с копированием файлов, load_all, load, delete, corrupt JSON, уникальные ID |
+| `test_test_dao.py` | 15 | LocalTestDao: create, update, load_all, load, delete, corrupt JSON, уникальные ID |
 | `test_create_test_form.py` | 6 | validate_form: пустое имя, нет обложки, нет изображений, множественные ошибки |
 
 Запуск:
