@@ -9,14 +9,18 @@ from PyQt6.QtGui import QFont, QKeyEvent
 from PyQt6.QtWidgets import (
     QApplication,
     QButtonGroup,
+    QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
+from eyetracker.monitor import format_screen_label, get_available_screens
+from eyetracker.settings import Settings
 from eyetracker.theme import (
     BG_MAIN,
     BG_SIDEBAR,
@@ -46,9 +50,16 @@ _SIDEBAR_ITEMS = [
 class HomeScreen(QWidget):
     """Home screen with a macOS-style sidebar and content area."""
 
-    def __init__(self, on_start_calibration: Callable[[], None]):
+    def __init__(
+        self,
+        on_start_calibration: Callable[[], None],
+        settings: Settings,
+        on_monitor_changed: Callable[[], None] | None = None,
+    ):
         super().__init__()
         self._on_start = on_start_calibration
+        self._settings = settings
+        self._on_monitor_changed_cb = on_monitor_changed
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         layout = QHBoxLayout(self)
@@ -63,7 +74,15 @@ class HomeScreen(QWidget):
         sep.setStyleSheet(f"background-color: {BORDER_COLOR};")
         layout.addWidget(sep)
 
-        layout.addWidget(self._build_content(), stretch=1)
+        self._content_stack = QStackedWidget()
+        self._content_stack.setStyleSheet(f"background-color: {BG_MAIN};")
+        self._content_pages: dict[str, QWidget] = {}
+        for item in _SIDEBAR_ITEMS:
+            page = self._build_page(item["id"], item["title"])
+            self._content_pages[item["id"]] = page
+            self._content_stack.addWidget(page)
+        self._content_stack.setCurrentWidget(self._content_pages["overview"])
+        layout.addWidget(self._content_stack, stretch=1)
 
     # ---- Sidebar -------------------------------------------------------------
 
@@ -113,16 +132,28 @@ class HomeScreen(QWidget):
         return sidebar
 
     def _on_sidebar_click(self, item_id: str):
+        if item_id == "settings":
+            self._refresh_monitor_combo()
+        page = self._content_pages.get(item_id)
+        if page:
+            self._content_stack.setCurrentWidget(page)
+
+    # ---- Content pages -------------------------------------------------------
+
+    def _build_page(self, item_id: str, title: str) -> QWidget:
+        if item_id == "overview":
+            return self._build_overview_page()
         if item_id == "calibration":
-            self._on_start()
+            return self._build_calibration_page()
+        if item_id == "settings":
+            return self._build_settings_page()
+        return self._build_placeholder_page(title)
 
-    # ---- Content area --------------------------------------------------------
+    def _build_overview_page(self) -> QWidget:
+        page = QWidget()
+        page.setStyleSheet(f"background-color: {BG_MAIN};")
 
-    def _build_content(self) -> QWidget:
-        content = QWidget()
-        content.setStyleSheet(f"background-color: {BG_MAIN};")
-
-        vbox = QVBoxLayout(content)
+        vbox = QVBoxLayout(page)
         vbox.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         title = QLabel("EyeTracker")
@@ -131,6 +162,33 @@ class HomeScreen(QWidget):
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         desc = QLabel("Система отслеживания взгляда\nчерез веб-камеру")
+        desc.setFont(QFont(FONT_FAMILY, 16))
+        desc.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent;")
+        desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        vbox.addWidget(title)
+        vbox.addSpacing(10)
+        vbox.addWidget(desc)
+
+        return page
+
+    def _build_calibration_page(self) -> QWidget:
+        page = QWidget()
+        page.setStyleSheet(f"background-color: {BG_MAIN};")
+
+        vbox = QVBoxLayout(page)
+        vbox.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        title = QLabel("Калибровка")
+        title.setFont(QFont(FONT_FAMILY, 36, QFont.Weight.Bold))
+        title.setStyleSheet(f"color: {TEXT_PRIMARY}; background: transparent;")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        desc = QLabel(
+            "Калибровка состоит из 9 точек на экране.\n"
+            "Кликните по каждой точке 5 раз, глядя на неё.\n"
+            "После калибровки будет измерена точность."
+        )
         desc.setFont(QFont(FONT_FAMILY, 16))
         desc.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent;")
         desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -158,7 +216,103 @@ class HomeScreen(QWidget):
         vbox.addSpacing(30)
         vbox.addWidget(btn, alignment=Qt.AlignmentFlag.AlignCenter)
 
-        return content
+        return page
+
+    def _build_settings_page(self) -> QWidget:
+        page = QWidget()
+        page.setStyleSheet(f"background-color: {BG_MAIN};")
+
+        vbox = QVBoxLayout(page)
+        vbox.setContentsMargins(40, 40, 40, 40)
+        vbox.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        title = QLabel("Настройки")
+        title.setFont(QFont(FONT_FAMILY, 36, QFont.Weight.Bold))
+        title.setStyleSheet(f"color: {TEXT_PRIMARY}; background: transparent;")
+
+        section_label = QLabel("Монитор для трекинга")
+        section_label.setFont(QFont(FONT_FAMILY, 16))
+        section_label.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent;")
+
+        self._monitor_combo = QComboBox()
+        self._monitor_combo.setFixedWidth(400)
+        self._monitor_combo.setFont(QFont(FONT_FAMILY, 14))
+        self._monitor_combo.setStyleSheet(f"""
+            QComboBox {{
+                background-color: {BG_SIDEBAR};
+                color: {TEXT_PRIMARY};
+                border: 1px solid {BORDER_COLOR};
+                border-radius: {CORNER_RADIUS}px;
+                padding: 8px 12px;
+            }}
+            QComboBox::drop-down {{
+                border: none;
+            }}
+            QComboBox QAbstractItemView {{
+                background-color: {BG_SIDEBAR};
+                color: {TEXT_PRIMARY};
+                selection-background-color: {BG_SIDEBAR_ACTIVE};
+            }}
+        """)
+        self._refresh_monitor_combo()
+        self._monitor_combo.currentIndexChanged.connect(self._on_monitor_changed)
+
+        vbox.addWidget(title)
+        vbox.addSpacing(30)
+        vbox.addWidget(section_label)
+        vbox.addSpacing(8)
+        vbox.addWidget(self._monitor_combo)
+        vbox.addStretch()
+
+        return page
+
+    def _refresh_monitor_combo(self):
+        """Rebuild the monitor combo box from currently available screens."""
+        combo = self._monitor_combo
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("Основной монитор", userData=None)
+
+        saved_name = self._settings.tracking_display_name
+        selected_index = 0
+
+        for i, screen in enumerate(get_available_screens()):
+            label = format_screen_label(screen)
+            combo.addItem(label, userData=screen.name())
+            if screen.name() == saved_name:
+                selected_index = i + 1
+
+        combo.setCurrentIndex(selected_index)
+        combo.blockSignals(False)
+
+    def _on_monitor_changed(self, index: int):
+        screen_name = self._monitor_combo.currentData()
+        self._settings.tracking_display_name = screen_name
+        if self._on_monitor_changed_cb:
+            self._on_monitor_changed_cb()
+
+    def _build_placeholder_page(self, title_text: str) -> QWidget:
+        page = QWidget()
+        page.setStyleSheet(f"background-color: {BG_MAIN};")
+
+        vbox = QVBoxLayout(page)
+        vbox.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        title = QLabel(title_text)
+        title.setFont(QFont(FONT_FAMILY, 36, QFont.Weight.Bold))
+        title.setStyleSheet(f"color: {TEXT_PRIMARY}; background: transparent;")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        desc = QLabel("Скоро здесь появится контент")
+        desc.setFont(QFont(FONT_FAMILY, 16))
+        desc.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent;")
+        desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        vbox.addWidget(title)
+        vbox.addSpacing(10)
+        vbox.addWidget(desc)
+
+        return page
 
     # ---- Keys ----------------------------------------------------------------
 
