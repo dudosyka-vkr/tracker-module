@@ -1,4 +1,4 @@
-"""Abstract login service and local implementation."""
+"""Local filesystem implementation of LoginService."""
 
 from __future__ import annotations
 
@@ -6,27 +6,8 @@ import base64
 import json
 import secrets
 import time
-from abc import ABC, abstractmethod
-from dataclasses import dataclass
 
-
-@dataclass
-class AuthResult:
-    """Result of a successful login."""
-
-    token: str
-    username: str
-
-
-class LoginService(ABC):
-    """Abstract interface for authentication.
-
-    Implementations may authenticate locally (LocalLoginService) or via remote API.
-    """
-
-    @abstractmethod
-    def login(self, username: str, password: str) -> AuthResult:
-        """Authenticate a user and return an AuthResult with a JWT token."""
+from eyetracker.data.login.service import AuthResult, LoginService
 
 
 class LocalLoginService(LoginService):

@@ -10,6 +10,7 @@ from PyQt6.QtGui import QBrush, QFont, QKeyEvent, QPainter, QPainterPath, QPixma
 from PyQt6.QtWidgets import (
     QApplication,
     QButtonGroup,
+    QCheckBox,
     QComboBox,
     QFrame,
     QHBoxLayout,
@@ -26,10 +27,13 @@ from PyQt6.QtWidgets import (
 
 from eyetracker.core.monitor import format_screen_label, get_available_screens
 from eyetracker.data.draft_cache import DraftCache
-from eyetracker.data.login_service import LoginService
+from eyetracker.data.login import LoginService
+from eyetracker.data.record.service import RecordService
 from eyetracker.data.settings import Settings
-from eyetracker.data.test_dao import TestDao
+from eyetracker.data.test import TestDao, TestData
 from eyetracker.ui.pages.create_test_page import CreateTestChoicePage
+from eyetracker.ui.pages.record_detail_page import RecordDetailPage
+from eyetracker.ui.pages.records_list_page import RecordsListPage
 from eyetracker.ui.pages.test_form_page import FormMode, TestFormPage
 from eyetracker.ui.pages.test_library_page import TestLibraryPage
 from eyetracker.ui.theme import (
@@ -54,7 +58,7 @@ from eyetracker.ui.theme import (
 
 _SIDEBAR_ITEMS = [
     {"id": "overview", "title": "Обзор", "icon": "⌂"},
-    {"id": "calibration", "title": "Калибровка", "icon": "◎"},
+    {"id": "calibration", "title": "Демо-трекер", "icon": "◎"},
     {"id": "tests", "title": "Тесты", "icon": "☰"},
     {"id": "create_test", "title": "Создать тест", "icon": "+"},
     {"id": "settings", "title": "Настройки", "icon": "⚙"},
@@ -68,19 +72,26 @@ class HomeScreen(QWidget):
     def __init__(
         self,
         on_start_calibration: Callable[[], None],
+        on_start_test_run: Callable[[TestData], None],
         settings: Settings,
         test_dao: TestDao,
         login_service: LoginService,
         draft_cache: DraftCache,
+        record_service: RecordService,
         on_monitor_changed: Callable[[], None] | None = None,
     ):
         super().__init__()
         self._on_start = on_start_calibration
+        self._on_start_test_run = on_start_test_run
         self._settings = settings
         self._on_monitor_changed_cb = on_monitor_changed
         self._test_dao = test_dao
         self._login_service = login_service
         self._draft_cache = draft_cache
+        self._record_service = record_service
+        self._readiness_page: QWidget | None = None
+        self._records_page: QWidget | None = None
+        self._record_detail_page: QWidget | None = None
         self._detail_page: TestFormPage | None = None
         self._current_tab_id = "overview"
         self._sidebar_buttons: dict[str, QPushButton] = {}
@@ -670,11 +681,41 @@ class HomeScreen(QWidget):
         self._refresh_monitor_combo()
         self._monitor_combo.currentIndexChanged.connect(self._on_monitor_changed)
 
+        self._skip_calibration_cb = QCheckBox("Пропустить калибровку")
+        self._skip_calibration_cb.setFont(QFont(FONT_FAMILY, 14))
+        self._skip_calibration_cb.setStyleSheet(f"""
+            QCheckBox {{
+                color: {TEXT_PRIMARY};
+                background: transparent;
+                spacing: 8px;
+            }}
+            QCheckBox::indicator {{
+                width: 18px;
+                height: 18px;
+                border: 1px solid {BORDER_COLOR};
+                border-radius: 4px;
+                background-color: {BG_SIDEBAR};
+            }}
+            QCheckBox::indicator:checked {{
+                background-color: {BUTTON_BG};
+                border-color: {BUTTON_BG};
+            }}
+        """)
+        self._skip_calibration_cb.setChecked(self._settings.skip_calibration)
+        self._skip_calibration_cb.toggled.connect(self._on_skip_calibration_changed)
+
+        skip_desc = QLabel("Запускать трекер без калибровки (с весами по умолчанию)")
+        skip_desc.setFont(QFont(FONT_FAMILY, 12))
+        skip_desc.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent; padding-left: 26px;")
+
         vbox.addWidget(title)
         vbox.addSpacing(30)
         vbox.addWidget(section_label)
         vbox.addSpacing(8)
         vbox.addWidget(self._monitor_combo)
+        vbox.addSpacing(24)
+        vbox.addWidget(self._skip_calibration_cb)
+        vbox.addWidget(skip_desc)
         vbox.addStretch()
 
         return page
@@ -702,6 +743,9 @@ class HomeScreen(QWidget):
         self._settings.tracking_display_name = screen_name
         if self._on_monitor_changed_cb:
             self._on_monitor_changed_cb()
+
+    def _on_skip_calibration_changed(self, checked: bool) -> None:
+        self._settings.skip_calibration = checked
 
     # ---- Help page ------------------------------------------------------------
 
@@ -864,6 +908,8 @@ class HomeScreen(QWidget):
         else:
             self._detail_page.back_requested.connect(self._back_to_tests)
         self._detail_page.edit_requested.connect(lambda tid=test_id: self._show_test_detail(tid, FormMode.EDIT))
+        self._detail_page.run_test_requested.connect(lambda tid=test_id: self._on_run_test(tid))
+        self._detail_page.results_requested.connect(lambda tid=test_id: self._show_records_list(tid))
         self._detail_page.test_updated.connect(lambda tid=test_id: self._show_test_detail(tid, FormMode.VIEW))
         self._detail_page.test_deleted.connect(self._back_to_tests)
         self._content_stack.addWidget(self._detail_page)
@@ -874,6 +920,104 @@ class HomeScreen(QWidget):
             if draft and draft.draft_type == "edit" and draft.test_id == test_id:
                 self._detail_page.restore_from_draft(draft)
                 QMessageBox.information(self, "Восстановление", "Черновик был восстановлен.")
+
+    def _on_run_test(self, test_id: str) -> None:
+        test = self._test_dao.load(test_id)
+        if test is None:
+            return
+        self._remove_detail_page()
+        self._show_readiness_page(test)
+
+    def _show_readiness_page(self, test: TestData) -> None:
+        self._remove_readiness_page()
+
+        page = QWidget()
+        page.setStyleSheet(f"background-color: {BG_MAIN};")
+
+        vbox = QVBoxLayout(page)
+        vbox.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        title = QLabel("Готовы начать?")
+        title.setFont(QFont(FONT_FAMILY, 36, QFont.Weight.Bold))
+        title.setStyleSheet(f"color: {TEXT_PRIMARY}; background: transparent;")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        subtitle = QLabel(test.name)
+        subtitle.setFont(QFont(FONT_FAMILY, 18))
+        subtitle.setStyleSheet(f"color: {TEXT_PRIMARY}; background: transparent;")
+        subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        desc = QLabel(
+            "После нажатия «Начать» будет запущена калибровка,\n"
+            "затем последовательный показ изображений теста."
+        )
+        desc.setFont(QFont(FONT_FAMILY, 14))
+        desc.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent;")
+        desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        start_btn = QPushButton("Начать")
+        start_btn.setFixedSize(200, 44)
+        start_btn.setFont(QFont(FONT_FAMILY, 15, QFont.Weight.Bold))
+        start_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        start_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {BUTTON_BG};
+                color: white;
+                border: none;
+                border-radius: {CORNER_RADIUS}px;
+            }}
+            QPushButton:hover {{
+                background-color: {BUTTON_HOVER};
+            }}
+        """)
+        start_btn.clicked.connect(lambda: self._on_readiness_start(test))
+
+        back_btn = QPushButton("Назад")
+        back_btn.setFixedSize(200, 44)
+        back_btn.setFont(QFont(FONT_FAMILY, 15))
+        back_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        back_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: transparent;
+                color: {BUTTON_BG};
+                border: 1px solid {BUTTON_BG};
+                border-radius: {CORNER_RADIUS}px;
+            }}
+            QPushButton:hover {{
+                background-color: {BUTTON_BG};
+                color: white;
+            }}
+        """)
+        back_btn.clicked.connect(lambda tid=test.id: self._on_readiness_back(tid))
+
+        vbox.addWidget(title)
+        vbox.addSpacing(10)
+        vbox.addWidget(subtitle)
+        vbox.addSpacing(20)
+        vbox.addWidget(desc)
+        vbox.addSpacing(30)
+        vbox.addWidget(start_btn, alignment=Qt.AlignmentFlag.AlignCenter)
+        vbox.addSpacing(10)
+        vbox.addWidget(back_btn, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        self._readiness_page = page
+        self._content_stack.addWidget(page)
+        self._content_stack.setCurrentWidget(page)
+
+    def _on_readiness_start(self, test: TestData) -> None:
+        self._remove_readiness_page()
+        self._select_sidebar_item("overview")
+        self._on_start_test_run(test)
+
+    def _on_readiness_back(self, test_id: str) -> None:
+        self._remove_readiness_page()
+        self._show_test_detail(test_id)
+
+    def _remove_readiness_page(self) -> None:
+        if self._readiness_page is not None:
+            self._content_stack.removeWidget(self._readiness_page)
+            self._readiness_page.deleteLater()
+            self._readiness_page = None
 
     def _back_to_tests(self) -> None:
         self._remove_detail_page()
@@ -888,6 +1032,59 @@ class HomeScreen(QWidget):
             self._content_stack.removeWidget(self._detail_page)
             self._detail_page.deleteLater()
             self._detail_page = None
+
+    # ---- Records navigation --------------------------------------------------
+
+    def _show_records_list(self, test_id: str) -> None:
+        test = self._test_dao.load(test_id)
+        if test is None:
+            return
+        self._remove_detail_page()
+        self._remove_record_detail_page()
+        self._remove_records_page()
+
+        self._records_page = RecordsListPage(
+            record_service=self._record_service,
+            test_id=test_id,
+            test_name=test.name,
+            on_view_report=lambda rid, tn=test.name, tid=test_id: self._show_record_detail(rid, tn, tid),
+            on_back=lambda tid=test_id: self._back_from_records_list(tid),
+        )
+        self._content_stack.addWidget(self._records_page)
+        self._content_stack.setCurrentWidget(self._records_page)
+
+    def _back_from_records_list(self, test_id: str) -> None:
+        # Show test detail first so the stack never flashes a wrong page
+        self._show_test_detail(test_id)
+        self._remove_records_page()
+
+    def _show_record_detail(self, record_id: str, test_name: str, test_id: str) -> None:
+        self._remove_record_detail_page()
+
+        self._record_detail_page = RecordDetailPage(
+            record_service=self._record_service,
+            record_id=record_id,
+            test_name=test_name,
+            on_back=lambda tid=test_id: self._back_from_record_detail(tid),
+        )
+        self._content_stack.addWidget(self._record_detail_page)
+        self._content_stack.setCurrentWidget(self._record_detail_page)
+
+    def _back_from_record_detail(self, test_id: str) -> None:
+        self._remove_record_detail_page()
+        self._show_records_list(test_id)
+
+    def _remove_records_page(self) -> None:
+        if self._records_page is not None:
+            self._content_stack.removeWidget(self._records_page)
+            self._records_page.deleteLater()
+            self._records_page = None
+
+    def _remove_record_detail_page(self) -> None:
+        if self._record_detail_page is not None:
+            self._content_stack.removeWidget(self._record_detail_page)
+            self._record_detail_page.deleteLater()
+            self._record_detail_page = None
 
     # ---- Create test navigation ---------------------------------------------
 
@@ -924,7 +1121,11 @@ class HomeScreen(QWidget):
 
     def keyPressEvent(self, event: QKeyEvent):  # noqa: N802
         if event.key() == Qt.Key.Key_Escape:
-            if self._detail_page is not None and self._content_stack.currentWidget() is self._detail_page:
+            if self._record_detail_page is not None and self._content_stack.currentWidget() is self._record_detail_page:
+                self._record_detail_page._on_back()
+            elif self._records_page is not None and self._content_stack.currentWidget() is self._records_page:
+                self._records_page._on_back()
+            elif self._detail_page is not None and self._content_stack.currentWidget() is self._detail_page:
                 self._detail_page.back_requested.emit()
             elif self._current_tab_id != "overview":
                 self._select_sidebar_item("overview")

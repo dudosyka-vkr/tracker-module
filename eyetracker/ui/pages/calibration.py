@@ -87,10 +87,14 @@ class CalibrationScreen(QWidget):
     PHASE_MEASUREMENT = "measurement"
     PHASE_GAZE = "gaze"
 
-    def __init__(self, tracker: EyeTracker, on_back: Callable[[], None]):
+    def __init__(self, tracker: EyeTracker, on_back: Callable[[], None],
+                 on_finished: Callable[[], None] | None = None,
+                 skip_calibration: bool = False):
         super().__init__()
         self.wg = tracker
         self._on_back = on_back
+        self._on_finished = on_finished
+        self._skip_calibration = skip_calibration
         self.precision = PrecisionCalculator()
 
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -139,15 +143,28 @@ class CalibrationScreen(QWidget):
         self.wg.begin()
         self.wg.set_gaze_listener(self._on_gaze)
         self._start_video_preview()
-        self._phase = self.PHASE_INSTRUCTIONS
         self._timer.start(33)
         self.setFocus()
+
+        if self._skip_calibration:
+            if self._on_finished is not None:
+                self._on_finished()
+            else:
+                self._phase = self.PHASE_GAZE
+                self._show_gaze_dot = True
+        else:
+            self._phase = self.PHASE_INSTRUCTIONS
 
     def stop(self):
         """Called when leaving this screen."""
         self._video_running = False
         self._timer.stop()
         self.wg.end()
+
+    def stop_ui_only(self):
+        """Stop UI timers/threads but leave the tracker running for handoff."""
+        self._video_running = False
+        self._timer.stop()
 
     def resizeEvent(self, event):  # noqa: N802
         super().resizeEvent(event)
@@ -385,6 +402,10 @@ class CalibrationScreen(QWidget):
         cx = self.width() // 2
         cy = self.height() // 2
         self._accuracy = self.precision.calculate_precision(cx, cy)
+
+        if self._on_finished is not None:
+            self._on_finished()
+            return
 
         self._phase = self.PHASE_GAZE
         self._show_gaze_dot = True

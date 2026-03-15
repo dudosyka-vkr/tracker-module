@@ -21,7 +21,7 @@ from PyQt6.QtWidgets import (
 )
 
 from eyetracker.data.draft_cache import DraftCache, DraftData
-from eyetracker.data.test_dao import TestDao, TestData
+from eyetracker.data.test import TestDao, TestData
 from eyetracker.ui.widgets.image_grid import ImageGridWidget
 from eyetracker.ui.theme import (
     BG_MAIN,
@@ -82,6 +82,8 @@ class TestFormPage(QWidget):
     test_updated = pyqtSignal()
     test_deleted = pyqtSignal()
     edit_requested = pyqtSignal()
+    run_test_requested = pyqtSignal()
+    results_requested = pyqtSignal()
 
     def __init__(
         self,
@@ -203,7 +205,8 @@ class TestFormPage(QWidget):
     def _build_view_actions(self, layout: QHBoxLayout) -> None:
         actions = [
             ("Редактировать", self._on_edit_clicked),
-            ("Использовать", self._on_use_clicked),
+            ("Пройти", self._on_use_clicked),
+            ("Результаты", self._on_results_clicked),
             ("Выгрузить Json", self._on_export_clicked),
             ("Удалить", self._on_delete_clicked),
         ]
@@ -533,7 +536,10 @@ class TestFormPage(QWidget):
         self.edit_requested.emit()
 
     def _on_use_clicked(self) -> None:
-        QMessageBox.information(self, "Использовать", "Скоро будет доступно")
+        self.run_test_requested.emit()
+
+    def _on_results_clicked(self) -> None:
+        self.results_requested.emit()
 
     def _on_export_clicked(self) -> None:
         QMessageBox.information(self, "Выгрузить Json", "Скоро будет доступно")

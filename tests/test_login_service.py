@@ -3,7 +3,7 @@
 import base64
 import json
 
-from eyetracker.data.login_service import LocalLoginService
+from eyetracker.data.login import LocalLoginService
 
 
 def test_login_returns_auth_result():

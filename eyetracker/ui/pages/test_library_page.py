@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from eyetracker.data.test_dao import TestDao, TestData
+from eyetracker.data.test import TestDao, TestData
 from eyetracker.ui.theme import (
     BG_MAIN,
     BG_SIDEBAR,

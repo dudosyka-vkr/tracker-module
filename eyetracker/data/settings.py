@@ -50,6 +50,16 @@ class Settings:
         self._save()
 
     @property
+    def skip_calibration(self) -> bool:
+        """Whether to skip the calibration dot-clicking phase."""
+        return self._data.get("skip_calibration", False)
+
+    @skip_calibration.setter
+    def skip_calibration(self, value: bool) -> None:
+        self._data["skip_calibration"] = value
+        self._save()
+
+    @property
     def last_opened_test_id(self) -> str | None:
         """ID of the last opened test."""
         return self._data.get("last_opened_test_id")
