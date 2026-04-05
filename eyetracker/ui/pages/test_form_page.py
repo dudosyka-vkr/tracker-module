@@ -360,6 +360,8 @@ class TestFormPage(QWidget):
         readonly = self._mode == FormMode.VIEW
         self._image_grid = ImageGridWidget(readonly=readonly)
         self._image_grid.add_clicked.connect(self._on_add_image)
+        if self._mode == FormMode.EDIT:
+            self._image_grid.roi_saved.connect(self._on_roi_saved)
 
         self._images_error = self._make_error_label()
 
@@ -379,6 +381,8 @@ class TestFormPage(QWidget):
 
         image_paths = [str(self._dao.get_image_path(test, f)) for f in test.image_filenames]
         self._image_grid.set_images(image_paths)
+        if self._test_data is not None:
+            self._image_grid.set_regions(self._test_data.image_regions)
 
     def set_draft_cache(
         self,
@@ -562,6 +566,12 @@ class TestFormPage(QWidget):
         except OSError as exc:
             logger.error("Failed to delete test: %s", exc)
             QMessageBox.warning(self, "Ошибка", f"Не удалось удалить тест: {exc}")
+
+    def _on_roi_saved(self, filename: str, rois: list) -> None:
+        if self._test_data is None:
+            return
+        self._test_data.image_regions[filename] = rois
+        self._dao.save_regions(self._test_data.id, self._test_data.image_regions)
 
     # -- validation display --------------------------------------------------
 

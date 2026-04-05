@@ -55,7 +55,7 @@ class LocalTestDao(TestDao):
             raw = json.loads(meta_path.read_text(encoding="utf-8"))
             if not isinstance(raw, list):
                 return []
-            return [TestData(**item) for item in raw]
+            return [TestData(**{**{"image_regions": {}}, **item}) for item in raw]
         except (json.JSONDecodeError, OSError, TypeError, KeyError) as exc:
             logger.warning("Failed to load tests meta: %s", exc)
             return []
@@ -81,11 +81,13 @@ class LocalTestDao(TestDao):
             shutil.rmtree(test_dir)
         tmp_dir.rename(test_dir)
 
+        existing = next((t for t in self.load_all() if t.id == test_id), None)
         updated = TestData(
             id=test_id,
             name=name,
             cover_filename=cover_filename,
             image_filenames=image_filenames,
+            image_regions=existing.image_regions if existing is not None else {},
         )
         tests = [updated if t.id == test_id else t for t in self.load_all()]
         self._save_meta(tests)
@@ -103,6 +105,14 @@ class LocalTestDao(TestDao):
 
     def get_image_path(self, test: TestData, filename: str) -> Path:
         return self._base / test.id / filename
+
+    def save_regions(self, test_id: str, regions: dict[str, list[dict]]) -> None:
+        tests = self.load_all()
+        for t in tests:
+            if t.id == test_id:
+                t.image_regions = regions
+                break
+        self._save_meta(tests)
 
     # -- private helpers -----------------------------------------------------
 

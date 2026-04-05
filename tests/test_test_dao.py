@@ -149,3 +149,29 @@ def test_update_preserves_other_tests(dao: LocalTestDao, sample_image: Path):
     assert len(all_tests) == 2
     names = {t.name for t in all_tests}
     assert names == {"A2", "B"}
+
+
+def test_save_regions(dao: LocalTestDao, sample_image: Path):
+    test = dao.create("T1", sample_image, [sample_image])
+    regions = {
+        "001.png": [
+            {"name": "Area1", "points": [{"x": 0.1, "y": 0.1}, {"x": 0.5, "y": 0.1}, {"x": 0.3, "y": 0.5}]},
+        ]
+    }
+    dao.save_regions(test.id, regions)
+    reloaded = dao.load(test.id)
+    assert reloaded is not None
+    assert reloaded.image_regions == regions
+
+
+def test_load_old_test_without_regions_field(dao: LocalTestDao, sample_image: Path):
+    test = dao.create("T2", sample_image, [sample_image])
+    meta_path = dao._meta_path()
+    import json
+    data = json.loads(meta_path.read_text())
+    for item in data:
+        item.pop("image_regions", None)
+    meta_path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+    reloaded = dao.load(test.id)
+    assert reloaded is not None
+    assert reloaded.image_regions == {}

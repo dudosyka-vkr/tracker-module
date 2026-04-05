@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -15,6 +15,7 @@ class TestData:
     name: str
     cover_filename: str
     image_filenames: list[str]
+    image_regions: dict = field(default_factory=dict)
 
 
 class TestDao(ABC):
@@ -50,3 +51,7 @@ class TestDao(ABC):
     @abstractmethod
     def get_image_path(self, test: TestData, filename: str) -> Path:
         """Return absolute path to a test image by filename."""
+
+    @abstractmethod
+    def save_regions(self, test_id: str, regions: dict[str, list[dict]]) -> None:
+        """Persist only the image_regions field for an existing test."""
