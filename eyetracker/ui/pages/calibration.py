@@ -10,6 +10,7 @@ from __future__ import annotations
 import math
 import time
 import threading
+from pathlib import Path
 from typing import Callable
 
 import cv2
@@ -19,6 +20,8 @@ from PyQt6.QtGui import QColor, QFont, QPainter, QImage, QKeyEvent, QMouseEvent
 from PyQt6.QtWidgets import QWidget
 
 from eyetracker.core.pipeline import EyeTracker
+
+_CALIBRATION_DATA_PATH = Path.home() / ".eyetracker" / "calibration.json"
 
 
 # ---------------------------------------------------------------------------
@@ -147,6 +150,7 @@ class CalibrationScreen(QWidget):
         self.setFocus()
 
         if self._skip_calibration:
+            self.wg.load_calibration(_CALIBRATION_DATA_PATH)
             if self._on_finished is not None:
                 self._on_finished()
             else:
@@ -402,6 +406,8 @@ class CalibrationScreen(QWidget):
         cx = self.width() // 2
         cy = self.height() // 2
         self._accuracy = self.precision.calculate_precision(cx, cy)
+
+        self.wg.save_calibration(_CALIBRATION_DATA_PATH)
 
         if self._on_finished is not None:
             self._on_finished()

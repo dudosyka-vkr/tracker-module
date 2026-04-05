@@ -6,6 +6,7 @@ and the main EyeTracker orchestrator into a single module.
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import os
@@ -14,6 +15,7 @@ import sys
 import time
 import threading
 import urllib.request
+from pathlib import Path
 from typing import Callable
 
 import cv2
@@ -529,6 +531,40 @@ class EyeTracker:
         for reg in self._regs:
             reg.add_data(left, right, [x, y], event_type)
         return self
+
+    def save_calibration(self, path: Path) -> None:
+        """Persist click-based calibration data to disk."""
+        reg = self._regs[0]
+        if reg.eye_features_clicks.length == 0:
+            return
+        data = {
+            "screen_x_clicks": reg.screen_x_clicks.data,
+            "screen_y_clicks": reg.screen_y_clicks.data,
+            "eye_features_clicks": reg.eye_features_clicks.data,
+        }
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(data), encoding="utf-8")
+        except OSError as exc:
+            logger.warning("Failed to save calibration to %s: %s", path, exc)
+
+    def load_calibration(self, path: Path) -> bool:
+        """Load previously saved calibration data. Returns True on success."""
+        if not path.is_file():
+            return False
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            reg = self._regs[0]
+            for item in data["screen_x_clicks"]:
+                reg.screen_x_clicks.push(item)
+            for item in data["screen_y_clicks"]:
+                reg.screen_y_clicks.push(item)
+            for item in data["eye_features_clicks"]:
+                reg.eye_features_clicks.push(item)
+            return True
+        except (OSError, KeyError, json.JSONDecodeError, ValueError) as exc:
+            logger.warning("Failed to load calibration from %s: %s", path, exc)
+            return False
 
     # ------------------------------------------------------------------
     # Internal

@@ -681,9 +681,7 @@ class HomeScreen(QWidget):
         self._refresh_monitor_combo()
         self._monitor_combo.currentIndexChanged.connect(self._on_monitor_changed)
 
-        self._skip_calibration_cb = QCheckBox("Пропустить калибровку")
-        self._skip_calibration_cb.setFont(QFont(FONT_FAMILY, 14))
-        self._skip_calibration_cb.setStyleSheet(f"""
+        _checkbox_style = f"""
             QCheckBox {{
                 color: {TEXT_PRIMARY};
                 background: transparent;
@@ -700,13 +698,27 @@ class HomeScreen(QWidget):
                 background-color: {BUTTON_BG};
                 border-color: {BUTTON_BG};
             }}
-        """)
+        """
+
+        self._skip_calibration_cb = QCheckBox("Пропустить калибровку")
+        self._skip_calibration_cb.setFont(QFont(FONT_FAMILY, 14))
+        self._skip_calibration_cb.setStyleSheet(_checkbox_style)
         self._skip_calibration_cb.setChecked(self._settings.skip_calibration)
         self._skip_calibration_cb.toggled.connect(self._on_skip_calibration_changed)
 
         skip_desc = QLabel("Запускать трекер без калибровки (с весами по умолчанию)")
         skip_desc.setFont(QFont(FONT_FAMILY, 12))
         skip_desc.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent; padding-left: 26px;")
+
+        self._show_gaze_marker_cb = QCheckBox("Показывать маркер взгляда во время теста")
+        self._show_gaze_marker_cb.setFont(QFont(FONT_FAMILY, 14))
+        self._show_gaze_marker_cb.setStyleSheet(_checkbox_style)
+        self._show_gaze_marker_cb.setChecked(self._settings.show_gaze_marker)
+        self._show_gaze_marker_cb.toggled.connect(self._on_show_gaze_marker_changed)
+
+        marker_desc = QLabel("Отображать точку взгляда поверх изображения (как в режиме демонстрации)")
+        marker_desc.setFont(QFont(FONT_FAMILY, 12))
+        marker_desc.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent; padding-left: 26px;")
 
         vbox.addWidget(title)
         vbox.addSpacing(30)
@@ -716,6 +728,9 @@ class HomeScreen(QWidget):
         vbox.addSpacing(24)
         vbox.addWidget(self._skip_calibration_cb)
         vbox.addWidget(skip_desc)
+        vbox.addSpacing(16)
+        vbox.addWidget(self._show_gaze_marker_cb)
+        vbox.addWidget(marker_desc)
         vbox.addStretch()
 
         return page
@@ -746,6 +761,9 @@ class HomeScreen(QWidget):
 
     def _on_skip_calibration_changed(self, checked: bool) -> None:
         self._settings.skip_calibration = checked
+
+    def _on_show_gaze_marker_changed(self, checked: bool) -> None:
+        self._settings.show_gaze_marker = checked
 
     # ---- Help page ------------------------------------------------------------
 
@@ -1066,6 +1084,7 @@ class HomeScreen(QWidget):
             record_id=record_id,
             test_name=test_name,
             on_back=lambda tid=test_id: self._back_from_record_detail(tid),
+            test_dao=self._test_dao,
         )
         self._content_stack.addWidget(self._record_detail_page)
         self._content_stack.setCurrentWidget(self._record_detail_page)

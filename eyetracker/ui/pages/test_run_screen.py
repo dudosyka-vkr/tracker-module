@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
-from PyQt6.QtCore import Qt, QRectF, QTimer
+from PyQt6.QtCore import Qt, QPointF, QRectF, QTimer
 from PyQt6.QtGui import QColor, QFont, QImage, QKeyEvent, QPainter
 from PyQt6.QtWidgets import QWidget
 
@@ -25,6 +25,7 @@ class TestRunScreen(QWidget):
         test_dao: TestDao,
         on_finish: Callable[[], None],
         on_back: Callable[[], None],
+        show_gaze_marker: bool = False,
     ):
         super().__init__()
         self._tracker = tracker
@@ -32,6 +33,7 @@ class TestRunScreen(QWidget):
         self._test_dao = test_dao
         self._on_finish = on_finish
         self._on_back = on_back
+        self._show_gaze_marker = show_gaze_marker
 
         self._images: list[Path] = [
             test_dao.get_image_path(test, fn) for fn in test.image_filenames
@@ -43,6 +45,10 @@ class TestRunScreen(QWidget):
         self._current_image: QImage | None = None
         self._started_at: str | None = None
         self._finished_at: str | None = None
+        self._screen_w = 0
+        self._screen_h = 0
+        self._gaze_x: float = 0.0
+        self._gaze_y: float = 0.0
 
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
@@ -70,6 +76,8 @@ class TestRunScreen(QWidget):
             return
         self._started_at = datetime.now(timezone.utc).isoformat()
         self._current_index = 0
+        self._screen_w = self.width()
+        self._screen_h = self.height()
         self._load_current_image()
         self._tracker.set_gaze_listener(self._on_gaze)
         self._image_timer.start()
@@ -102,11 +110,13 @@ class TestRunScreen(QWidget):
     def _on_gaze(self, gaze_data: dict | None, elapsed: float) -> None:
         if gaze_data is None:
             return
+        x, y = gaze_data["x"], gaze_data["y"]
+        self._gaze_x = x
+        self._gaze_y = y
         if self._current_index >= len(self._aggregators):
             return
-        x, y = gaze_data["x"], gaze_data["y"]
         self._aggregators[self._current_index].add_point(
-            x, y, self.width(), self.height()
+            x, y, self._screen_w, self._screen_h
         )
 
     # ---- Rendering -----------------------------------------------------------
@@ -136,6 +146,11 @@ class TestRunScreen(QWidget):
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
             f"Изображение {current}/{total}",
         )
+
+        if self._show_gaze_marker:
+            p.setBrush(QColor("red"))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.drawEllipse(QPointF(self._gaze_x, self._gaze_y), 10, 10)
 
         p.end()
 

@@ -1,14 +1,13 @@
-"""Record detail page: per-image metrics tabs + export."""
+"""Record detail page: per-image heatmap tabs + export."""
 
 from __future__ import annotations
 
-import json
-from dataclasses import asdict
 from pathlib import Path
 from typing import Callable
 
+import numpy as np
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QFont, QImage, QPixmap
 from PyQt6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
@@ -16,13 +15,16 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
+from eyetracker.core.heatmap import generate_heatmap
 from eyetracker.core.report_export import export_record_zip
 from eyetracker.core.time_fmt import format_datetime
-from eyetracker.data.record.service import Record, RecordService
+from eyetracker.data.record.service import Record, RecordItem, RecordService
+from eyetracker.data.test import TestDao, TestData
 from eyetracker.ui.theme import (
     BG_MAIN,
     BG_SIDEBAR,
@@ -39,7 +41,7 @@ from eyetracker.ui.theme import (
 
 
 class RecordDetailPage(QWidget):
-    """Detail view for a single record with per-image tabs."""
+    """Detail view for a single record with per-image heatmap tabs."""
 
     def __init__(
         self,
@@ -47,19 +49,26 @@ class RecordDetailPage(QWidget):
         record_id: str,
         test_name: str,
         on_back: Callable[[], None],
+        test_dao: TestDao | None = None,
     ):
         super().__init__()
         self._record_service = record_service
         self._record_id = record_id
         self._test_name = test_name
         self._on_back = on_back
+        self._test_dao = test_dao
         self._record: Record | None = None
+        self._test_data: TestData | None = None
         self._tab_buttons: list[QPushButton] = []
         self._active_tab = 0
 
         self.setStyleSheet(f"background-color: {BG_MAIN};")
         self._build_ui()
         self._load_record()
+
+    # ------------------------------------------------------------------
+    # UI construction
+    # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
         self._layout = QVBoxLayout(self)
@@ -114,33 +123,28 @@ class RecordDetailPage(QWidget):
         self._layout.addWidget(self._subtitle_label)
 
         # Tab bar
-        self._tab_bar = QHBoxLayout()
+        tab_container = QWidget()
+        tab_container.setStyleSheet("background: transparent;")
+        self._tab_bar = QHBoxLayout(tab_container)
         self._tab_bar.setSpacing(4)
-        self._tab_container = QWidget()
-        self._tab_container.setStyleSheet("background: transparent;")
-        self._tab_container.setLayout(self._tab_bar)
-        self._layout.addWidget(self._tab_container)
+        self._layout.addWidget(tab_container)
 
-        # JSON content area
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        scroll.setStyleSheet(f"""
-            QScrollArea {{
-                background-color: {BG_SIDEBAR};
-                border: 1px solid {BORDER_COLOR};
-                border-radius: {CORNER_RADIUS}px;
-            }}
-        """)
+        # Scroll area for the heatmap image
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        self._scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        self._content_widget = QWidget()
+        self._content_widget.setStyleSheet("background: transparent;")
+        self._content_layout = QVBoxLayout(self._content_widget)
+        self._content_layout.setContentsMargins(0, 0, 0, 0)
+        self._content_layout.setSpacing(0)
+        self._scroll.setWidget(self._content_widget)
+        self._layout.addWidget(self._scroll, stretch=1)
 
-        self._json_label = QLabel()
-        self._json_label.setFont(QFont("Menlo", 12))
-        self._json_label.setStyleSheet(f"color: {TEXT_PRIMARY}; background: transparent; padding: 16px;")
-        self._json_label.setWordWrap(True)
-        self._json_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self._json_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-        scroll.setWidget(self._json_label)
-        self._layout.addWidget(scroll, stretch=1)
+    # ------------------------------------------------------------------
+    # Data loading
+    # ------------------------------------------------------------------
 
     def _load_record(self) -> None:
         self._record = self._record_service.load(self._record_id)
@@ -153,14 +157,20 @@ class RecordDetailPage(QWidget):
             f"{self._record.user_login}  ·  {format_datetime(self._record.started_at)}"
         )
 
+        if self._test_dao is not None:
+            self._test_data = self._test_dao.load(self._record.test_id)
+
         self._build_tabs()
         if self._record.items:
             self._select_tab(0)
 
+    # ------------------------------------------------------------------
+    # Tabs
+    # ------------------------------------------------------------------
+
     def _build_tabs(self) -> None:
         if self._record is None:
             return
-
         for i in range(len(self._record.items)):
             btn = QPushButton(str(i + 1))
             btn.setFixedSize(40, 32)
@@ -170,14 +180,13 @@ class RecordDetailPage(QWidget):
             btn.clicked.connect(lambda checked, idx=i: self._select_tab(idx))
             self._tab_buttons.append(btn)
             self._tab_bar.addWidget(btn)
-
         self._tab_bar.addStretch()
         self._update_tab_styles()
 
     def _select_tab(self, index: int) -> None:
         self._active_tab = index
         self._update_tab_styles()
-        self._show_item_metrics(index)
+        self._show_item(index)
 
     def _update_tab_styles(self) -> None:
         for i, btn in enumerate(self._tab_buttons):
@@ -205,13 +214,64 @@ class RecordDetailPage(QWidget):
                     }}
                 """)
 
-    def _show_item_metrics(self, index: int) -> None:
+    # ------------------------------------------------------------------
+    # Content rendering
+    # ------------------------------------------------------------------
+
+    def _clear_content(self) -> None:
+        while self._content_layout.count():
+            child = self._content_layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+
+    def _show_item(self, index: int) -> None:
         if self._record is None or index >= len(self._record.items):
             return
+
+        self._clear_content()
         item = self._record.items[index]
-        metrics_dict = asdict(item.metrics)
-        pretty = json.dumps(metrics_dict, indent=2, ensure_ascii=False)
-        self._json_label.setText(pretty)
+
+        heatmap_label = self._build_heatmap_label(item)
+        self._content_layout.addWidget(heatmap_label)
+        self._content_layout.addStretch()
+
+    def _build_heatmap_label(self, item: RecordItem) -> QLabel:
+        label = QLabel()
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        label.setStyleSheet("background: transparent;")
+
+        image_path = self._resolve_image_path(item)
+        if image_path is None or not image_path.exists():
+            label.setText(f"Изображение не найдено: {item.image_filename}")
+            label.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent;")
+            return label
+
+        try:
+            rgb = generate_heatmap(image_path, item.metrics.gaze_groups)
+        except Exception:
+            label.setText("Ошибка генерации тепловой карты")
+            label.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent;")
+            return label
+
+        pixmap = _rgb_array_to_pixmap(rgb)
+        label.setPixmap(
+            pixmap.scaled(
+                800, 600,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        )
+        return label
+
+    def _resolve_image_path(self, item: RecordItem) -> Path | None:
+        if self._test_dao is None or self._test_data is None:
+            return None
+        return self._test_dao.get_image_path(self._test_data, item.image_filename)
+
+    # ------------------------------------------------------------------
+    # Export
+    # ------------------------------------------------------------------
 
     def _on_export(self) -> None:
         if self._record is None:
@@ -225,7 +285,17 @@ class RecordDetailPage(QWidget):
             return
 
         try:
-            export_record_zip(self._record, Path(path))
+            export_record_zip(self._record, Path(path), self._test_dao, self._test_data)
             QMessageBox.information(self, "Готово", "Отчет сохранён.")
         except OSError as exc:
             QMessageBox.warning(self, "Ошибка", f"Не удалось сохранить: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _rgb_array_to_pixmap(rgb: np.ndarray) -> QPixmap:
+    h, w, ch = rgb.shape
+    img = QImage(rgb.tobytes(), w, h, ch * w, QImage.Format.Format_RGB888)
+    return QPixmap.fromImage(img)

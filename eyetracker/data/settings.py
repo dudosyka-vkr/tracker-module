@@ -60,6 +60,16 @@ class Settings:
         self._save()
 
     @property
+    def show_gaze_marker(self) -> bool:
+        """Whether to draw the gaze dot on screen during a test run."""
+        return self._data.get("show_gaze_marker", False)
+
+    @show_gaze_marker.setter
+    def show_gaze_marker(self, value: bool) -> None:
+        self._data["show_gaze_marker"] = value
+        self._save()
+
+    @property
     def last_opened_test_id(self) -> str | None:
         """ID of the last opened test."""
         return self._data.get("last_opened_test_id")

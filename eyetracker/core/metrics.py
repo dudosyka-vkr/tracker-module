@@ -25,7 +25,7 @@ class AggregatedGroup:
 class GazeMetricsAggregator:
     """Collects gaze points and groups them into averaged chunks."""
 
-    def __init__(self, group_size: int = 10):
+    def __init__(self, group_size: int = 1):
         self._group_size = group_size
         self._points: list[GazePoint] = []
 

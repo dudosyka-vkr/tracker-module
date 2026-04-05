@@ -160,6 +160,7 @@ class App:
             test_dao=self._test_dao,
             on_finish=self._on_test_run_done,
             on_back=self._go_to_home,
+            show_gaze_marker=self._settings.show_gaze_marker,
         )
         self._stack.addWidget(self._test_run_screen)
         self._stack.setCurrentWidget(self._test_run_screen)
