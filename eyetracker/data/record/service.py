@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -11,6 +11,8 @@ class RecordItemMetrics:
     """Gaze metrics for a single image."""
 
     gaze_groups: list[dict]
+    fixations: list[dict] = field(default_factory=list)
+    first_fixation_time_ms: int | None = None
 
 
 @dataclass

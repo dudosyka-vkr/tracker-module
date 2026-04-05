@@ -10,6 +10,8 @@ from PyQt6.QtCore import Qt, QPointF, QRectF, QTimer
 from PyQt6.QtGui import QColor, QFont, QImage, QKeyEvent, QPainter
 from PyQt6.QtWidgets import QWidget
 
+from eyetracker.core.face_emotion import FaceEmotionRecognition
+from eyetracker.core.fixation import FixationDetector
 from eyetracker.core.metrics import GazeMetricsAggregator
 from eyetracker.core.pipeline import EyeTracker
 from eyetracker.data.test import TestDao, TestData
@@ -26,6 +28,10 @@ class TestRunScreen(QWidget):
         on_finish: Callable[[], None],
         on_back: Callable[[], None],
         show_gaze_marker: bool = False,
+        image_display_duration_ms: int = 5000,
+        fixation_enabled: bool = True,
+        fixation_k: float = 80.0,
+        fixation_window_samples: int = 10,
     ):
         super().__init__()
         self._tracker = tracker
@@ -34,6 +40,9 @@ class TestRunScreen(QWidget):
         self._on_finish = on_finish
         self._on_back = on_back
         self._show_gaze_marker = show_gaze_marker
+        self._fixation_enabled = fixation_enabled
+        self._fixation_k = fixation_k
+        self._fixation_window_samples = fixation_window_samples
 
         self._images: list[Path] = [
             test_dao.get_image_path(test, fn) for fn in test.image_filenames
@@ -41,10 +50,16 @@ class TestRunScreen(QWidget):
         self._aggregators: list[GazeMetricsAggregator] = [
             GazeMetricsAggregator() for _ in self._images
         ]
+        self._fixations_per_image: list[list[dict]] = [[] for _ in self._images]
+        self._first_fixation_recorded = False
+        self._fixation_detector: FixationDetector | None = None
+        self._emotion_recognizer = FaceEmotionRecognition()
+
         self._current_index = 0
         self._current_image: QImage | None = None
         self._started_at: str | None = None
         self._finished_at: str | None = None
+        self._image_started_at: datetime | None = None
         self._screen_w = 0
         self._screen_h = 0
         self._gaze_x: float = 0.0
@@ -53,7 +68,7 @@ class TestRunScreen(QWidget):
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         self._image_timer = QTimer()
-        self._image_timer.setInterval(5000)
+        self._image_timer.setInterval(image_display_duration_ms)
         self._image_timer.timeout.connect(self._advance_image)
 
         self._repaint_timer = QTimer()
@@ -70,6 +85,9 @@ class TestRunScreen(QWidget):
     def get_results(self) -> list[tuple[str, GazeMetricsAggregator]]:
         return list(zip(self._test.image_filenames, self._aggregators))
 
+    def get_fixations(self) -> list[list[dict]]:
+        return self._fixations_per_image
+
     def start(self) -> None:
         if not self._images:
             self._on_finish()
@@ -78,7 +96,15 @@ class TestRunScreen(QWidget):
         self._current_index = 0
         self._screen_w = self.width()
         self._screen_h = self.height()
+        self._image_started_at = datetime.now(timezone.utc)
         self._load_current_image()
+        if self._fixation_enabled:
+            self._fixation_detector = FixationDetector(
+                k=self._fixation_k,
+                window_size_samples=self._fixation_window_samples,
+                on_fixation=self._on_fixation_detected,
+            )
+        self._first_fixation_recorded = False
         self._tracker.set_gaze_listener(self._on_gaze)
         self._image_timer.start()
         self._repaint_timer.start(33)
@@ -98,6 +124,10 @@ class TestRunScreen(QWidget):
         self._current_image = QImage(str(path))
 
     def _advance_image(self) -> None:
+        if self._fixation_detector is not None:
+            self._fixation_detector.reset()
+        self._first_fixation_recorded = False
+        self._image_started_at = datetime.now(timezone.utc)
         self._current_index += 1
         if self._current_index >= len(self._images):
             self._finished_at = datetime.now(timezone.utc).isoformat()
@@ -118,6 +148,30 @@ class TestRunScreen(QWidget):
         self._aggregators[self._current_index].add_point(
             x, y, self._screen_w, self._screen_h
         )
+        if self._fixation_detector is not None:
+            self._fixation_detector.on_gaze_point(x, y)
+
+    def _on_fixation_detected(self, fixation: dict) -> None:
+        if self._current_index >= len(self._fixations_per_image):
+            return
+        fixation["is_first"] = not self._first_fixation_recorded
+        if not self._first_fixation_recorded:
+            self._first_fixation_recorded = True
+        if self._image_started_at is not None:
+            fixation["time_ms"] = int(
+                (datetime.now(timezone.utc) - self._image_started_at).total_seconds() * 1000
+            )
+        fixation["emotion"] = self._emotion_recognizer.get_emotion_at(
+            fixation["center"]["x"], fixation["center"]["y"]
+        )
+        # Normalize center to [0, 1] so the detail page can render without screen dims
+        sw = self._screen_w or 1
+        sh = self._screen_h or 1
+        fixation["center"] = {
+            "x": fixation["center"]["x"] / sw,
+            "y": fixation["center"]["y"] / sh,
+        }
+        self._fixations_per_image[self._current_index].append(fixation)
 
     # ---- Rendering -----------------------------------------------------------
 

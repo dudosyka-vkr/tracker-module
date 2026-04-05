@@ -70,6 +70,56 @@ class Settings:
         self._save()
 
     @property
+    def fixation_enabled(self) -> bool:
+        """Whether fixation detection is active during test runs."""
+        return self._data.get("fixation_enabled", True)
+
+    @fixation_enabled.setter
+    def fixation_enabled(self, value: bool) -> None:
+        self._data["fixation_enabled"] = value
+        self._save()
+
+    @property
+    def fixation_radius_threshold_k(self) -> float:
+        """Fixation radius threshold in screen pixels."""
+        return float(self._data.get("fixation_radius_threshold_k", 80.0))
+
+    @fixation_radius_threshold_k.setter
+    def fixation_radius_threshold_k(self, value: float) -> None:
+        self._data["fixation_radius_threshold_k"] = value
+        self._save()
+
+    @property
+    def fixation_window_size_samples(self) -> int:
+        """Number of recent gaze points kept in the fixation detection window."""
+        return int(self._data.get("fixation_window_size_samples", 10))
+
+    @fixation_window_size_samples.setter
+    def fixation_window_size_samples(self, value: int) -> None:
+        self._data["fixation_window_size_samples"] = value
+        self._save()
+
+    @property
+    def image_display_duration_ms(self) -> int:
+        """How long each test image is shown, in milliseconds."""
+        return int(self._data.get("image_display_duration_ms", 5000))
+
+    @image_display_duration_ms.setter
+    def image_display_duration_ms(self, value: int) -> None:
+        self._data["image_display_duration_ms"] = value
+        self._save()
+
+    @property
+    def tracking_timestep_ms(self) -> int:
+        """Gaze pipeline loop interval in milliseconds (controls sampling rate)."""
+        return int(self._data.get("tracking_timestep_ms", 50))
+
+    @tracking_timestep_ms.setter
+    def tracking_timestep_ms(self, value: int) -> None:
+        self._data["tracking_timestep_ms"] = value
+        self._save()
+
+    @property
     def last_opened_test_id(self) -> str | None:
         """ID of the last opened test."""
         return self._data.get("last_opened_test_id")

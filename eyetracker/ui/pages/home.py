@@ -19,7 +19,9 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QDoubleSpinBox,
     QSizePolicy,
+    QSpinBox,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -731,6 +733,124 @@ class HomeScreen(QWidget):
         vbox.addSpacing(16)
         vbox.addWidget(self._show_gaze_marker_cb)
         vbox.addWidget(marker_desc)
+
+        _spin_style = f"""
+            QSpinBox {{
+                background-color: {BG_SIDEBAR};
+                color: {TEXT_PRIMARY};
+                border: 1px solid {BORDER_COLOR};
+                border-radius: {CORNER_RADIUS}px;
+                padding: 8px 12px;
+            }}
+            QSpinBox::up-button, QSpinBox::down-button {{
+                width: 0;
+            }}
+        """
+
+        duration_label = QLabel("Время показа изображения")
+        duration_label.setFont(QFont(FONT_FAMILY, 14))
+        duration_label.setStyleSheet(f"color: {TEXT_PRIMARY}; background: transparent;")
+
+        self._duration_spin = QSpinBox()
+        self._duration_spin.setRange(1, 60)
+        self._duration_spin.setSuffix(" сек")
+        self._duration_spin.setValue(self._settings.image_display_duration_ms // 1000)
+        self._duration_spin.setFixedWidth(160)
+        self._duration_spin.setFont(QFont(FONT_FAMILY, 14))
+        self._duration_spin.setStyleSheet(_spin_style)
+        self._duration_spin.valueChanged.connect(self._on_duration_changed)
+
+        duration_desc = QLabel("Продолжительность просмотра каждого изображения во время теста")
+        duration_desc.setFont(QFont(FONT_FAMILY, 12))
+        duration_desc.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent;")
+
+        rate_label = QLabel("Частота трекинга взгляда")
+        rate_label.setFont(QFont(FONT_FAMILY, 14))
+        rate_label.setStyleSheet(f"color: {TEXT_PRIMARY}; background: transparent;")
+
+        self._timestep_spin = QSpinBox()
+        self._timestep_spin.setRange(20, 200)
+        self._timestep_spin.setSuffix(" мс")
+        self._timestep_spin.setValue(self._settings.tracking_timestep_ms)
+        self._timestep_spin.setFixedWidth(160)
+        self._timestep_spin.setFont(QFont(FONT_FAMILY, 14))
+        self._timestep_spin.setStyleSheet(_spin_style)
+        self._timestep_spin.valueChanged.connect(self._on_timestep_changed)
+
+        rate_desc = QLabel("Интервал между измерениями взгляда (меньше = выше частота)")
+        rate_desc.setFont(QFont(FONT_FAMILY, 12))
+        rate_desc.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent;")
+
+        vbox.addSpacing(16)
+        vbox.addWidget(duration_label)
+        vbox.addSpacing(8)
+        vbox.addWidget(self._duration_spin)
+        vbox.addWidget(duration_desc)
+        vbox.addSpacing(16)
+        vbox.addWidget(rate_label)
+        vbox.addSpacing(8)
+        vbox.addWidget(self._timestep_spin)
+        vbox.addWidget(rate_desc)
+
+        self._fixation_enabled_cb = QCheckBox("Детекция фиксаций")
+        self._fixation_enabled_cb.setFont(QFont(FONT_FAMILY, 14))
+        self._fixation_enabled_cb.setStyleSheet(_checkbox_style)
+        self._fixation_enabled_cb.setChecked(self._settings.fixation_enabled)
+        self._fixation_enabled_cb.toggled.connect(self._on_fixation_enabled_changed)
+
+        fixation_enabled_desc = QLabel("Определять фиксации взгляда во время прохождения теста")
+        fixation_enabled_desc.setFont(QFont(FONT_FAMILY, 12))
+        fixation_enabled_desc.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent; padding-left: 26px;")
+
+        k_label = QLabel("Порог радиуса фиксации (K)")
+        k_label.setFont(QFont(FONT_FAMILY, 14))
+        k_label.setStyleSheet(f"color: {TEXT_PRIMARY}; background: transparent;")
+
+        self._fixation_k_spin = QDoubleSpinBox()
+        self._fixation_k_spin.setRange(10.0, 500.0)
+        self._fixation_k_spin.setSingleStep(5.0)
+        self._fixation_k_spin.setDecimals(1)
+        self._fixation_k_spin.setSuffix(" px")
+        self._fixation_k_spin.setValue(self._settings.fixation_radius_threshold_k)
+        self._fixation_k_spin.setFixedWidth(160)
+        self._fixation_k_spin.setFont(QFont(FONT_FAMILY, 14))
+        self._fixation_k_spin.setStyleSheet(_spin_style.replace("QSpinBox", "QDoubleSpinBox"))
+        self._fixation_k_spin.valueChanged.connect(self._on_fixation_k_changed)
+
+        k_desc = QLabel("Максимальный радиус в пикселях, при котором взгляд считается фиксацией")
+        k_desc.setFont(QFont(FONT_FAMILY, 12))
+        k_desc.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent;")
+
+        window_label = QLabel("Окно детекции фиксации")
+        window_label.setFont(QFont(FONT_FAMILY, 14))
+        window_label.setStyleSheet(f"color: {TEXT_PRIMARY}; background: transparent;")
+
+        self._fixation_window_spin = QSpinBox()
+        self._fixation_window_spin.setRange(3, 50)
+        self._fixation_window_spin.setSuffix(" точек")
+        self._fixation_window_spin.setValue(self._settings.fixation_window_size_samples)
+        self._fixation_window_spin.setFixedWidth(160)
+        self._fixation_window_spin.setFont(QFont(FONT_FAMILY, 14))
+        self._fixation_window_spin.setStyleSheet(_spin_style)
+        self._fixation_window_spin.valueChanged.connect(self._on_fixation_window_changed)
+
+        window_desc = QLabel("Длина скользящего временного окна для определения фиксации")
+        window_desc.setFont(QFont(FONT_FAMILY, 12))
+        window_desc.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent;")
+
+        vbox.addSpacing(16)
+        vbox.addWidget(self._fixation_enabled_cb)
+        vbox.addWidget(fixation_enabled_desc)
+        vbox.addSpacing(16)
+        vbox.addWidget(k_label)
+        vbox.addSpacing(8)
+        vbox.addWidget(self._fixation_k_spin)
+        vbox.addWidget(k_desc)
+        vbox.addSpacing(16)
+        vbox.addWidget(window_label)
+        vbox.addSpacing(8)
+        vbox.addWidget(self._fixation_window_spin)
+        vbox.addWidget(window_desc)
         vbox.addStretch()
 
         return page
@@ -764,6 +884,21 @@ class HomeScreen(QWidget):
 
     def _on_show_gaze_marker_changed(self, checked: bool) -> None:
         self._settings.show_gaze_marker = checked
+
+    def _on_duration_changed(self, seconds: int) -> None:
+        self._settings.image_display_duration_ms = seconds * 1000
+
+    def _on_timestep_changed(self, ms: int) -> None:
+        self._settings.tracking_timestep_ms = ms
+
+    def _on_fixation_enabled_changed(self, checked: bool) -> None:
+        self._settings.fixation_enabled = checked
+
+    def _on_fixation_k_changed(self, value: float) -> None:
+        self._settings.fixation_radius_threshold_k = value
+
+    def _on_fixation_window_changed(self, samples: int) -> None:
+        self._settings.fixation_window_size_samples = samples
 
     # ---- Help page ------------------------------------------------------------
 

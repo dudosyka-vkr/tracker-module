@@ -9,6 +9,7 @@ from pathlib import Path
 
 import cv2
 
+from eyetracker.core.fixation_map import generate_all_fixations_map
 from eyetracker.core.heatmap import generate_heatmap
 from eyetracker.data.record.service import Record
 from eyetracker.data.test import TestDao, TestData
@@ -67,6 +68,17 @@ def export_record_zip(
                     zf.writestr(f"{folder}/heatmap.png", buf.tobytes())
             except Exception:
                 pass
+
+            # Fixation map image
+            if item.metrics.fixations:
+                try:
+                    rgb_fix = generate_all_fixations_map(image_path, item.metrics.fixations)
+                    bgr_fix = cv2.cvtColor(rgb_fix, cv2.COLOR_RGB2BGR)
+                    ok_fix, buf_fix = cv2.imencode(".png", bgr_fix)
+                    if ok_fix:
+                        zf.writestr(f"{folder}/fixation_map.png", buf_fix.tobytes())
+                except Exception:
+                    pass
 
             # Metrics JSON
             zf.writestr(f"{folder}/metrics.json", metrics_json)

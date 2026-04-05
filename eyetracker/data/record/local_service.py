@@ -104,7 +104,11 @@ class LocalRecordService(RecordService):
                 RecordItem(
                     image_filename=it["image_filename"],
                     image_index=it["image_index"],
-                    metrics=RecordItemMetrics(gaze_groups=it["metrics"]["gaze_groups"]),
+                    metrics=RecordItemMetrics(
+                        gaze_groups=it["metrics"]["gaze_groups"],
+                        fixations=it["metrics"].get("fixations", []),
+                        first_fixation_time_ms=it["metrics"].get("first_fixation_time_ms"),
+                    ),
                 )
                 for it in data["items"]
             ]

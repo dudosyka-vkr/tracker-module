@@ -110,6 +110,7 @@ class App:
         self._move_to_target_screen()
 
         tracker = EyeTracker()
+        tracker.params.data_timestep = self._settings.tracking_timestep_ms
         self._calibration = CalibrationScreen(
             tracker=tracker,
             on_back=self._go_to_home,
@@ -130,6 +131,7 @@ class App:
         self._move_to_target_screen()
 
         tracker = EyeTracker()
+        tracker.params.data_timestep = self._settings.tracking_timestep_ms
         self._calibration = CalibrationScreen(
             tracker=tracker,
             on_back=self._go_to_home,
@@ -161,6 +163,10 @@ class App:
             on_finish=self._on_test_run_done,
             on_back=self._go_to_home,
             show_gaze_marker=self._settings.show_gaze_marker,
+            image_display_duration_ms=self._settings.image_display_duration_ms,
+            fixation_enabled=self._settings.fixation_enabled,
+            fixation_k=self._settings.fixation_radius_threshold_k,
+            fixation_window_samples=self._settings.fixation_window_size_samples,
         )
         self._stack.addWidget(self._test_run_screen)
         self._stack.setCurrentWidget(self._test_run_screen)
@@ -195,15 +201,24 @@ class App:
         duration_ms = int((finished_dt - started_dt).total_seconds() * 1000)
 
         items: list[RecordItem] = []
+        fixations_all = self._test_run_screen.get_fixations()
         for idx, (filename, aggregator) in enumerate(self._test_run_screen.get_results()):
             groups = [
                 {"x": g.x, "y": g.y, "count": g.count}
                 for g in aggregator.get_aggregated()
             ]
+            fixations = fixations_all[idx] if idx < len(fixations_all) else []
+            first_fix_time = next(
+                (fx.get("time_ms") for fx in fixations if fx.get("is_first")), None
+            )
             items.append(RecordItem(
                 image_filename=filename,
                 image_index=idx,
-                metrics=RecordItemMetrics(gaze_groups=groups),
+                metrics=RecordItemMetrics(
+                    gaze_groups=groups,
+                    fixations=fixations,
+                    first_fixation_time_ms=first_fix_time,
+                ),
             ))
 
         return Record(

@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from eyetracker.core.fixation_map import generate_fixation_map
 from eyetracker.core.heatmap import generate_heatmap
 from eyetracker.core.report_export import export_record_zip
 from eyetracker.core.time_fmt import format_datetime
@@ -38,6 +39,55 @@ from eyetracker.ui.theme import (
     TEXT_PRIMARY,
     TEXT_SECONDARY,
 )
+
+
+_BADGE_W = 108
+_BADGE_H = 61  # ~10% smaller than 120×68
+
+
+class _FixationBadge(QWidget):
+    """Small card that shows fixation number + emotion and fires on mouse-enter."""
+
+    def __init__(self, number: int, emotion: str, on_enter,
+                 time_ms: int | None = None, parent=None):
+        super().__init__(parent)
+        self._on_enter = on_enter
+        self.setFixedSize(_BADGE_W, _BADGE_H)
+        self.setObjectName("FixationBadge")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        self.setStyleSheet(f"""
+            #FixationBadge {{
+                background-color: {BG_SIDEBAR};
+                border: 1px solid {BORDER_COLOR};
+                border-radius: {CORNER_RADIUS}px;
+            }}
+            #FixationBadge:hover {{
+                border-color: {BUTTON_HOVER};
+            }}
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setSpacing(1)
+
+        num_lbl = QLabel(f"#{number} {emotion}")
+        num_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        num_lbl.setFont(QFont(FONT_FAMILY, 11, QFont.Weight.Bold))
+        num_lbl.setStyleSheet(f"background: transparent; color: {TEXT_PRIMARY};")
+        layout.addWidget(num_lbl)
+
+        if time_ms is not None:
+            time_lbl = QLabel(f"{time_ms} ms")
+            time_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            time_lbl.setFont(QFont(FONT_FAMILY, 9))
+            time_lbl.setStyleSheet(f"background: transparent; color: {TEXT_SECONDARY};")
+            layout.addWidget(time_lbl)
+
+    def enterEvent(self, event) -> None:
+        self._on_enter()
+        super().enterEvent(event)
 
 
 class RecordDetailPage(QWidget):
@@ -231,38 +281,138 @@ class RecordDetailPage(QWidget):
         self._clear_content()
         item = self._record.items[index]
 
-        heatmap_label = self._build_heatmap_label(item)
-        self._content_layout.addWidget(heatmap_label)
+        self._content_layout.addWidget(self._build_heatmap_widget(item))
+        self._content_layout.addWidget(self._build_fixation_list(item))
         self._content_layout.addStretch()
 
-    def _build_heatmap_label(self, item: RecordItem) -> QLabel:
+    def _build_heatmap_widget(self, item: RecordItem) -> QWidget:
+        container = QWidget()
+        container.setStyleSheet("background: transparent;")
+        vbox = QVBoxLayout(container)
+        vbox.setContentsMargins(0, 0, 0, 0)
+        vbox.setSpacing(8)
+
+        heading = QLabel("Тепловая карта")
+        heading.setFont(QFont(FONT_FAMILY, 16, QFont.Weight.Bold))
+        heading.setStyleSheet(f"color: {TEXT_PRIMARY}; background: transparent;")
+        vbox.addWidget(heading)
+
         label = QLabel()
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        label.setStyleSheet("background: transparent;")
+        label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        label.setFixedHeight(540)
+        label.setStyleSheet(
+            f"background-color: {BG_SIDEBAR}; border: 1px solid {BORDER_COLOR};"
+            f" border-radius: {CORNER_RADIUS}px; color: {TEXT_SECONDARY};"
+        )
 
         image_path = self._resolve_image_path(item)
         if image_path is None or not image_path.exists():
             label.setText(f"Изображение не найдено: {item.image_filename}")
-            label.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent;")
-            return label
+        else:
+            try:
+                rgb = generate_heatmap(image_path, item.metrics.gaze_groups)
+                label.setPixmap(
+                    _rgb_array_to_pixmap(rgb).scaled(
+                        960, 540,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                )
+            except Exception:
+                label.setText("Ошибка генерации тепловой карты")
 
+        vbox.addWidget(label)
+        return container
+
+    def _build_fixation_list(self, item: RecordItem) -> QWidget:
+        container = QWidget()
+        container.setStyleSheet("background: transparent;")
+        vbox = QVBoxLayout(container)
+        vbox.setContentsMargins(0, 16, 0, 0)
+        vbox.setSpacing(8)
+
+        fixations = item.metrics.fixations
+        heading = QLabel(f"Фиксации ({len(fixations)})")
+        heading.setFont(QFont(FONT_FAMILY, 16, QFont.Weight.Bold))
+        heading.setStyleSheet(f"color: {TEXT_PRIMARY}; background: transparent;")
+        vbox.addWidget(heading)
+
+        if not fixations:
+            empty = QLabel("Фиксации не обнаружены")
+            empty.setFont(QFont(FONT_FAMILY, 13))
+            empty.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent;")
+            vbox.addWidget(empty)
+            return container
+
+        sorted_fixations = sorted(fixations, key=lambda fx: 0 if fx.get("is_first") else 1)
+        image_path = self._resolve_image_path(item)
+
+        # --- Preview label ---
+        preview = QLabel()
+        preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        preview.setStyleSheet(
+            f"background-color: {BG_SIDEBAR}; border: 1px solid {BORDER_COLOR};"
+            f" border-radius: {CORNER_RADIUS}px; color: {TEXT_SECONDARY};"
+        )
+        preview.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        preview.setFixedHeight(540)
+        preview.setText("Наведите на строку таблицы для предпросмотра")
+        preview.setFont(QFont(FONT_FAMILY, 13))
+        vbox.addWidget(preview)
+
+        # --- Badge grid below the preview (4 per row, centered) ---
+        grid_widget = QWidget()
+        grid_widget.setStyleSheet("background: transparent;")
+        grid_vbox = QVBoxLayout(grid_widget)
+        grid_vbox.setContentsMargins(0, 8, 0, 0)
+        grid_vbox.setSpacing(8)
+
+        for row_start in range(0, len(sorted_fixations), 4):
+            chunk = sorted_fixations[row_start:row_start + 4]
+            row_w = QWidget()
+            row_w.setStyleSheet("background: transparent;")
+            row_h = QHBoxLayout(row_w)
+            row_h.setContentsMargins(0, 0, 0, 0)
+            row_h.setSpacing(8)
+            row_h.addStretch()
+            for offset, fx in enumerate(chunk):
+                idx = row_start + offset
+                badge = _FixationBadge(
+                    number=idx + 1,
+                    emotion=fx.get("emotion", "—"),
+                    on_enter=lambda i=idx, _fx=sorted_fixations, _path=image_path, _lbl=preview:
+                        self._update_fixation_preview(_fx, i, _path, _lbl),
+                    time_ms=fx.get("time_ms"),
+                )
+                row_h.addWidget(badge)
+            row_h.addStretch()
+            grid_vbox.addWidget(row_w)
+
+        vbox.addWidget(grid_widget)
+        return container
+
+    def _update_fixation_preview(
+        self,
+        fixations: list[dict],
+        row: int,
+        image_path,
+        label: QLabel,
+    ) -> None:
+        if row < 0 or row >= len(fixations) or image_path is None or not image_path.exists():
+            return
         try:
-            rgb = generate_heatmap(image_path, item.metrics.gaze_groups)
+            rgb = generate_fixation_map(image_path, fixations[row], number=row + 1)
         except Exception:
-            label.setText("Ошибка генерации тепловой карты")
-            label.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent;")
-            return label
-
+            return
         pixmap = _rgb_array_to_pixmap(rgb)
         label.setPixmap(
             pixmap.scaled(
-                800, 600,
+                960, 540,
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
             )
         )
-        return label
 
     def _resolve_image_path(self, item: RecordItem) -> Path | None:
         if self._test_dao is None or self._test_data is None:
