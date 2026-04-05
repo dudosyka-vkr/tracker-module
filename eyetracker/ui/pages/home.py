@@ -100,6 +100,7 @@ class HomeScreen(QWidget):
         self._current_tab_id = "overview"
         self._sidebar_buttons: dict[str, QPushButton] = {}
         self._logged_in = self._settings.auth_token is not None
+        self._current_username: str = self._settings.current_username
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         layout = QHBoxLayout(self)
@@ -373,6 +374,8 @@ class HomeScreen(QWidget):
         try:
             result = self._login_service.login(username, password)
             self._settings.auth_token = result.token
+            self._settings.current_username = username
+            self._current_username = username
             self._login_input.clear()
             self._password_input.clear()
             self._update_auth_state(True)
@@ -662,6 +665,9 @@ class HomeScreen(QWidget):
 
         return page
 
+    def _is_super_admin(self) -> bool:
+        return self._current_username.lower() == "admin"
+
     def _build_settings_page(self) -> QWidget:
         page = QWidget()
         page.setStyleSheet(f"background-color: {BG_MAIN};")
@@ -804,12 +810,6 @@ class HomeScreen(QWidget):
         vbox.addSpacing(8)
         vbox.addWidget(self._duration_spin)
         vbox.addWidget(duration_desc)
-        vbox.addSpacing(16)
-        vbox.addWidget(rate_label)
-        vbox.addSpacing(8)
-        vbox.addWidget(self._timestep_spin)
-        vbox.addWidget(rate_desc)
-
         self._fixation_enabled_cb = QCheckBox("Детекция фиксаций")
         self._fixation_enabled_cb.setFont(QFont(FONT_FAMILY, 14))
         self._fixation_enabled_cb.setStyleSheet(_checkbox_style)
@@ -856,19 +856,33 @@ class HomeScreen(QWidget):
         window_desc.setFont(QFont(FONT_FAMILY, 12))
         window_desc.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent;")
 
-        vbox.addSpacing(16)
-        vbox.addWidget(self._fixation_enabled_cb)
-        vbox.addWidget(fixation_enabled_desc)
-        vbox.addSpacing(16)
-        vbox.addWidget(k_label)
-        vbox.addSpacing(8)
-        vbox.addWidget(self._fixation_k_spin)
-        vbox.addWidget(k_desc)
-        vbox.addSpacing(16)
-        vbox.addWidget(window_label)
-        vbox.addSpacing(8)
-        vbox.addWidget(self._fixation_window_spin)
-        vbox.addWidget(window_desc)
+        admin_section = QWidget()
+        admin_section.setStyleSheet("background: transparent;")
+        admin_vbox = QVBoxLayout(admin_section)
+        admin_vbox.setContentsMargins(0, 0, 0, 0)
+        admin_vbox.setSpacing(0)
+
+        admin_vbox.addSpacing(16)
+        admin_vbox.addWidget(rate_label)
+        admin_vbox.addSpacing(8)
+        admin_vbox.addWidget(self._timestep_spin)
+        admin_vbox.addWidget(rate_desc)
+        admin_vbox.addSpacing(16)
+        admin_vbox.addWidget(self._fixation_enabled_cb)
+        admin_vbox.addWidget(fixation_enabled_desc)
+        admin_vbox.addSpacing(16)
+        admin_vbox.addWidget(k_label)
+        admin_vbox.addSpacing(8)
+        admin_vbox.addWidget(self._fixation_k_spin)
+        admin_vbox.addWidget(k_desc)
+        admin_vbox.addSpacing(16)
+        admin_vbox.addWidget(window_label)
+        admin_vbox.addSpacing(8)
+        admin_vbox.addWidget(self._fixation_window_spin)
+        admin_vbox.addWidget(window_desc)
+
+        admin_section.setVisible(self._is_super_admin())
+        vbox.addWidget(admin_section)
         vbox.addStretch()
 
         return page
@@ -947,6 +961,23 @@ class HomeScreen(QWidget):
             "Как сменить монитор для трекинга?",
             "Перейдите в «Настройки» и выберите нужный монитор из выпадающего списка. "
             "По умолчанию используется основной монитор.",
+        ),
+        (
+            "Что такое зоны интереса (ROI)?",
+            "Зоны интереса — это области на изображении, для которых автоматически "
+            "определяется, попал ли взгляд участника в эту зону во время теста. "
+            "Чтобы добавить зону: откройте тест, нажмите на изображение, выберите «Добавить зону», "
+            "нарисуйте выпуклый многоугольник кликами по точкам, закройте его двойным кликом на "
+            "первой точке, задайте название и цвет, нажмите «Сохранить». "
+            "Зон интереса на одном изображении может быть несколько. "
+            "В результатах теста для каждого прохождения отображается, была ли зона достигнута (✓).",
+        ),
+        (
+            "Как работает режим «Только первая фиксация»?",
+            "При создании зоны интереса можно включить флажок «Только первая фиксация». "
+            "В этом режиме зона считается достигнутой только если первая фиксация взгляда "
+            "на изображении попала именно в неё. Последующие фиксации не учитываются. "
+            "Это полезно для изучения того, на что участник обратил внимание в первую очередь.",
         ),
     ]
 

@@ -12,6 +12,7 @@ import cv2
 from eyetracker.core.fixation_map import generate_all_fixations_map
 from eyetracker.core.gaze_points_map import generate_gaze_points_map, generate_saccade_map
 from eyetracker.core.heatmap import generate_heatmap
+from eyetracker.core.roi import overlay_rois
 from eyetracker.data.record.service import Record
 from eyetracker.data.test import TestDao, TestData
 
@@ -60,9 +61,12 @@ def export_record_zip(
             suffix = image_path.suffix or ".png"
             zf.write(image_path, f"{folder}/original{suffix}")
 
+            rois = test_data.image_regions.get(item.image_filename, []) if test_data else []
+
             # Heatmap image
             try:
                 rgb = generate_heatmap(image_path, item.metrics.gaze_groups)
+                rgb = overlay_rois(rgb, rois)
                 bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
                 ok, buf = cv2.imencode(".png", bgr)
                 if ok:
@@ -74,6 +78,7 @@ def export_record_zip(
             if item.metrics.fixations:
                 try:
                     rgb_fix = generate_all_fixations_map(image_path, item.metrics.fixations)
+                    rgb_fix = overlay_rois(rgb_fix, rois)
                     bgr_fix = cv2.cvtColor(rgb_fix, cv2.COLOR_RGB2BGR)
                     ok_fix, buf_fix = cv2.imencode(".png", bgr_fix)
                     if ok_fix:

@@ -73,8 +73,10 @@ class RecordQuery:
 
     test_id: str | None = None
     user_login: str | None = None
-    date_from: str | None = None
-    date_to: str | None = None
+    user_login_contains: str | None = None
+    date_from: str | None = None  # ISO-8601 string
+    date_to: str | None = None    # ISO-8601 string
+    roi_hits: dict[str, bool] | None = None  # {roi_name: True=hit, False=not hit}
     page: int = 1
     page_size: int = 20
 
@@ -90,3 +92,8 @@ class RecordService(ABC):
 
     @abstractmethod
     def load(self, record_id: str) -> Record | None: ...
+
+    @abstractmethod
+    def suggest_users(self, params: RecordQuery) -> list[str]:
+        """Return sorted unique user logins matching params (user fields ignored)."""
+        ...

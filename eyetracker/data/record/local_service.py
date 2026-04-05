@@ -44,10 +44,15 @@ class LocalRecordService(RecordService):
             summaries = [s for s in summaries if s.test_id == params.test_id]
         if params.user_login is not None:
             summaries = [s for s in summaries if s.user_login == params.user_login]
+        if params.user_login_contains is not None:
+            needle = params.user_login_contains.lower()
+            summaries = [s for s in summaries if needle in s.user_login.lower()]
         if params.date_from is not None:
             summaries = [s for s in summaries if s.started_at >= params.date_from]
         if params.date_to is not None:
             summaries = [s for s in summaries if s.started_at <= params.date_to]
+        if params.roi_hits:
+            summaries = self._filter_by_roi(summaries, params.roi_hits)
 
         summaries.sort(key=lambda s: s.created_at, reverse=True)
         total = len(summaries)
@@ -68,6 +73,35 @@ class LocalRecordService(RecordService):
         if not path.is_file():
             return None
         return self._read_record(path)
+
+    def suggest_users(self, params: RecordQuery) -> list[str]:
+        neutral = RecordQuery(
+            test_id=params.test_id,
+            date_from=params.date_from,
+            date_to=params.date_to,
+            roi_hits=params.roi_hits,
+            page_size=10_000,
+        )
+        result = self.query(neutral)
+        return sorted({s.user_login for s in result.items if s.user_login})
+
+    def _filter_by_roi(
+        self, summaries: list[RecordSummary], roi_hits: dict[str, bool]
+    ) -> list[RecordSummary]:
+        result = []
+        for summary in summaries:
+            record = self.load(summary.id)
+            if record is None:
+                continue
+            # Aggregate: was each named ROI hit in any image of this record?
+            hit_map: dict[str, bool] = {}
+            for item in record.items:
+                for roi in item.metrics.roi_metrics:
+                    name = roi.get("name", "")
+                    hit_map[name] = hit_map.get(name, False) or bool(roi.get("hit"))
+            if all(hit_map.get(name, False) == required for name, required in roi_hits.items()):
+                result.append(summary)
+        return result
 
     def _load_all_summaries(self) -> list[RecordSummary]:
         if not self._base_dir.is_dir():

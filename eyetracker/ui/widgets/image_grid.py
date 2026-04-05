@@ -244,8 +244,40 @@ class ImagePreviewOverlay(QWidget):
         self._reposition_buttons()
         self.update()
 
+    @staticmethod
+    def _is_convex(points: list[tuple[float, float]]) -> bool:
+        """Return True if the polygon defined by *points* is convex."""
+        n = len(points)
+        if n < 3:
+            return False
+        sign = 0
+        for i in range(n):
+            ax, ay = points[i]
+            bx, by = points[(i + 1) % n]
+            cx, cy = points[(i + 2) % n]
+            cross = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax)
+            if cross != 0:
+                if sign == 0:
+                    sign = 1 if cross > 0 else -1
+                elif (cross > 0) != (sign > 0):
+                    return False
+        return True
+
     def _close_polygon(self) -> None:
-        """Mark the polygon as closed; Save becomes active once a name is entered."""
+        """Close the polygon after a convexity check; show error and reset if not convex."""
+        from PyQt6.QtWidgets import QMessageBox
+        if not self._is_convex(self._points):
+            QMessageBox.warning(
+                self,
+                "Невыпуклый многоугольник",
+                "Зона интереса должна быть выпуклым многоугольником.\n"
+                "Пожалуйста, нарисуйте область заново.",
+            )
+            self._points.clear()
+            self._polygon_closed = False
+            self._save_btn.setEnabled(False)
+            self.update()
+            return
         self._polygon_closed = True
         self._save_btn.setEnabled(bool(self._name_input.text().strip()))
         self.update()

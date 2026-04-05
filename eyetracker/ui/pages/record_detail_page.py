@@ -48,9 +48,9 @@ _BADGE_H = 61  # ~10% smaller than 120×68
 
 
 class _FixationBadge(QWidget):
-    """Small card that shows fixation number + emotion and fires on mouse-enter."""
+    """Small card that shows fixation number and fires on mouse-enter."""
 
-    def __init__(self, number: int, emotion: str, on_enter,
+    def __init__(self, number: int, on_enter,
                  time_ms: int | None = None, parent=None):
         super().__init__(parent)
         self._on_enter = on_enter
@@ -74,7 +74,7 @@ class _FixationBadge(QWidget):
         layout.setContentsMargins(8, 4, 8, 4)
         layout.setSpacing(1)
 
-        num_lbl = QLabel(f"#{number} {emotion}")
+        num_lbl = QLabel(f"#{number}")
         num_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         num_lbl.setFont(QFont(FONT_FAMILY, 11, QFont.Weight.Bold))
         num_lbl.setStyleSheet(f"background: transparent; color: {TEXT_PRIMARY};")
@@ -476,7 +476,6 @@ class RecordDetailPage(QWidget):
                 idx = row_start + offset
                 badge = _FixationBadge(
                     number=idx + 1,
-                    emotion=fx.get("emotion", "—"),
                     on_enter=lambda i=idx, _fx=sorted_fixations, _path=image_path,
                                     _lbl=preview, _rois=item_rois:
                         self._update_fixation_preview(_fx, i, _path, _lbl, _rois),
@@ -590,7 +589,11 @@ class RecordDetailPage(QWidget):
         if self._record is None:
             return
 
-        suggested = f"report_{self._record.test_id}_{self._record.id}.zip"
+        def _safe(s: str) -> str:
+            return "".join(c if c.isalnum() or c in "-_" else "_" for c in s)
+
+        dt_part = self._record.started_at[:19].replace("T", "_").replace(":", "-")
+        suggested = f"{_safe(self._test_name)}_{dt_part}_{_safe(self._record.user_login)}.zip"
         path, _ = QFileDialog.getSaveFileName(
             self, "Сохранить отчет", suggested, "Zip Archive (*.zip)"
         )

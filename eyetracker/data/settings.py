@@ -120,6 +120,19 @@ class Settings:
         self._save()
 
     @property
+    def current_username(self) -> str:
+        """Username of the currently logged-in user."""
+        return self._data.get("current_username", "")
+
+    @current_username.setter
+    def current_username(self, value: str) -> None:
+        if value:
+            self._data["current_username"] = value
+        else:
+            self._data.pop("current_username", None)
+        self._save()
+
+    @property
     def last_opened_test_id(self) -> str | None:
         """ID of the last opened test."""
         return self._data.get("last_opened_test_id")
