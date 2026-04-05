@@ -92,6 +92,7 @@ class HomeScreen(QWidget):
         self._draft_cache = draft_cache
         self._record_service = record_service
         self._readiness_page: QWidget | None = None
+        self._readiness_test_id: str | None = None
         self._records_page: QWidget | None = None
         self._record_detail_page: QWidget | None = None
         self._detail_page: TestFormPage | None = None
@@ -1083,6 +1084,7 @@ class HomeScreen(QWidget):
 
     def _show_readiness_page(self, test: TestData) -> None:
         self._remove_readiness_page()
+        self._readiness_test_id = test.id
 
         page = QWidget()
         page.setStyleSheet(f"background-color: {BG_MAIN};")
@@ -1141,7 +1143,7 @@ class HomeScreen(QWidget):
                 color: white;
             }}
         """)
-        back_btn.clicked.connect(lambda tid=test.id: self._on_readiness_back(tid))
+        back_btn.clicked.connect(lambda: self._on_readiness_back(test.id))
 
         vbox.addWidget(title)
         vbox.addSpacing(10)
@@ -1163,14 +1165,15 @@ class HomeScreen(QWidget):
         self._on_start_test_run(test)
 
     def _on_readiness_back(self, test_id: str) -> None:
-        self._remove_readiness_page()
         self._show_test_detail(test_id)
+        self._remove_readiness_page()
 
     def _remove_readiness_page(self) -> None:
         if self._readiness_page is not None:
             self._content_stack.removeWidget(self._readiness_page)
             self._readiness_page.deleteLater()
             self._readiness_page = None
+        self._readiness_test_id = None
 
     def _back_to_tests(self) -> None:
         self._remove_detail_page()
@@ -1279,6 +1282,9 @@ class HomeScreen(QWidget):
                 self._record_detail_page._on_back()
             elif self._records_page is not None and self._content_stack.currentWidget() is self._records_page:
                 self._records_page._on_back()
+            elif self._readiness_page is not None and self._content_stack.currentWidget() is self._readiness_page:
+                if self._readiness_test_id is not None:
+                    self._on_readiness_back(self._readiness_test_id)
             elif self._detail_page is not None and self._content_stack.currentWidget() is self._detail_page:
                 self._detail_page.back_requested.emit()
             elif self._current_tab_id != "overview":
