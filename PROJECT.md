@@ -24,7 +24,7 @@ eyetracker/
 │   │   │   ├── records_list_page.py           # RecordsListPage — таблица результатов теста
 │   │   │   └── record_detail_page.py          # RecordDetailPage — детали записи + экспорт
 │   │   └── widgets/                           # Переиспользуемые виджеты
-│   │       └── image_grid.py                  # ImageGridWidget + превью + drag-to-reorder
+│   │       └── image_grid.py                  # ImageGridWidget + превью + drag-to-reorder + ROI редактирование
 │   ├── data/                                  # Слой данных
 │   │   ├── settings.py                        # Settings — ~/.eyetracker/settings.json
 │   │   ├── draft_cache.py                     # DraftCache — автосохранение черновиков форм
@@ -36,7 +36,9 @@ eyetracker/
 │   │   │   └── local_service.py               # LocalRecordService — ~/.eyetracker/records/
 │   │   └── test/                              # Модуль тестов
 │   │       ├── dao.py                         # TestData + TestDao ABC
-│   │       └── local_dao.py                   # LocalTestDao — ~/.eyetracker/tests/<id>/
+│   │       ├── local_dao.py                   # LocalTestDao — ~/.eyetracker/tests/<id>/
+│   │       ├── export.py                      # export_test_zip — экспорт теста в ZIP (изображения + test.json)
+│   │       └── import_zip.py                  # import_test_zip — импорт теста из ZIP
 │   ├── core/                                  # Ядро (pipeline, утилиты)
 │   │   ├── pipeline.py                        # Трекер, регрессия, детекция моргания, сохранение/загрузка калибровки
 │   │   ├── util.py                            # Eye, DataWindow, KalmanFilter
@@ -45,9 +47,10 @@ eyetracker/
 │   │   ├── fixation.py                        # FixationDetector — детекция фиксаций в реальном времени
 │   │   ├── face_emotion.py                    # FaceEmotionRecognition — распознавание эмоций (заглушка)
 │   │   ├── heatmap.py                         # Генерация тепловой карты взгляда (Gaussian + JET colormap)
-│   │   ├── fixation_map.py                    # Рендер фиксационной карты (круг + номер + эмоция поверх изображения)
-│   │   ├── gaze_points_map.py                 # Карта точек взгляда и карта саккад (пунктирные векторы)
+│   │   ├── fixation_map.py                    # Рендер фиксационной карты (пронумерованные круги поверх изображения)
+│   │   ├── gaze_points_map.py                 # Карта точек взгляда (цвет по скорости) и карта саккад (векторы)
 │   │   ├── saccade.py                         # Детекция саккад по скорости (detect_saccades)
+│   │   ├── roi.py                             # ROI: point_in_polygon, compute_roi_metrics, overlay_rois
 │   │   ├── report_export.py                   # Экспорт записи в ZIP-архив (per-image папки)
 │   │   └── time_fmt.py                        # Форматирование ISO 8601 → DD.MM.YYYY HH:MM
 │   └── models/                                # Автоматически скачиваемая модель
@@ -58,16 +61,18 @@ eyetracker/
     ├── test_precision.py                      # 4 теста
     ├── test_settings.py                       # 9 тестов
     ├── test_monitor.py                        # 4 теста
-    ├── test_test_dao.py                       # 15 тестов
+    ├── test_test_dao.py                       # 17 тестов
     ├── test_create_test_form.py               # 6 тестов
     ├── test_draft_cache.py                    # 8 тестов
     ├── test_login_service.py                  # 3 теста
     ├── test_metrics.py                        # 5 тестов
     ├── test_record_service.py                 # 8 тестов
     ├── test_heatmap.py                        # 10 тестов
-    ├── test_report_export.py                  # 8 тестов
+    ├── test_report_export.py                  # 7 тестов
     ├── test_time_fmt.py                       # 4 теста
-    └── test_fixation.py                       # 5 тестов
+    ├── test_fixation.py                       # 5 тестов
+    ├── test_test_export.py                    # 6 тестов
+    └── test_test_import.py                    # 9 тестов
 ```
 
 ## Зависимости
@@ -398,6 +403,7 @@ JSON-хранилище настроек приложения в `~/.eyetracker/
 - `fixation_enabled` — включить детекцию фиксаций во время теста (`true` по умолчанию)
 - `fixation_radius_threshold_k` — порог радиуса фиксации в пикселях экрана (`80.0` по умолчанию)
 - `fixation_window_size_samples` — размер скользящего окна (в отсчётах) для детекции фиксаций (`10` по умолчанию)
+- `current_username` — логин текущего авторизованного пользователя (пустая строка = не авторизован; поле удаляется при выходе)
 
 ### 8. Выбор монитора — `monitor.py`
 
@@ -476,13 +482,38 @@ JSON-хранилище настроек приложения в `~/.eyetracker/
 
 ### 12.1. Карта фиксаций — `fixation_map.py`
 
-**`generate_fixation_map(image_path, fixation, *, number=None)`** — рендерит одну фиксационную точку поверх изображения:
+**`generate_fixation_map(image_path, fixation)`** — рендерит одну фиксационную точку поверх изображения:
 - Загружает исходное изображение через OpenCV
 - Определяет координаты: если `center.x > 1` или `center.y > 1` — абсолютные пиксели (старые записи); иначе нормализованные `[0, 1]` (новые записи)
-- Рисует полупрозрачный заливной круг (amber) + контурное кольцо
-- Если передан `number` — рисует номер фиксации внутри круга вместо центральной точки
-- Рисует тёмную подложку + текст эмоции над/под кругом
+- Рисует полупрозрачный заливной круг (amber) + контурное кольцо + центральную точку
 - Возвращает RGB uint8 `ndarray`
+
+**`generate_all_fixations_map(image_path, fixations)`** — рендерит все фиксации разом:
+- Нумерует каждый круг (номер внутри круга)
+- Возвращает RGB uint8 `ndarray`
+
+### 12.2. Карта точек взгляда и саккад — `gaze_points_map.py`
+
+**`generate_gaze_points_map(image_path, gaze_groups)`** — рендерит сырые точки взгляда поверх изображения:
+- Каждая точка окрашивается по скорости относительно предыдущей: синяя = медленная, красная = быстрая
+- Возвращает RGB uint8 `ndarray`
+
+**`generate_saccade_map(image_path, saccades)`** — рендерит векторы саккад поверх изображения:
+- Каждая саккада — стрелка из начальной в конечную точку
+- Возвращает RGB uint8 `ndarray`
+
+### 12.3. Области интереса (ROI) — `roi.py`
+
+**`point_in_polygon(px, py, points)`** — тест принадлежности точки полигону (ray-casting алгоритм). Принимает нормализованные координаты.
+
+**`compute_roi_metrics(regions, filename, fixations)`** — вычисляет попадание фиксаций в ROI для одного изображения:
+- `first_fixation` флаг ROI: засчитывается только если первая фиксация попала в область
+- Без флага: достаточно любой фиксации
+- Возвращает список `{"name", "color", "hit", "first_fixation_required"}`
+
+**`overlay_rois(rgb, rois)`** — отрисовывает ROI-полигоны поверх RGB-изображения:
+- Полупрозрачная заливка + контур + название в центроиде
+- Принимает нормализованные `{x, y}` координаты
 
 ### 13. Экспорт отчётов — `report_export.py`
 
@@ -490,9 +521,22 @@ JSON-хранилище настроек приложения в `~/.eyetracker/
 - `report.json` — полный JSON записи (все поля Record, включая items и metrics)
 - Для каждого изображения — папка `image_N/`:
   - `original.<ext>` — оригинальное изображение
-  - `heatmap.png` — тепловая карта взгляда
-  - `metrics.json` — метрики для данного изображения
+  - `heatmap.png` — тепловая карта взгляда (с наложением ROI если заданы)
+  - `fixation_map.png` — карта фиксаций с нумерацией (если есть фиксации; с наложением ROI)
+  - `gaze_points.png` — карта точек взгляда, окрашенных по скорости
+  - `saccade_map.png` — карта векторов саккад (если есть саккады)
+  - `metrics.json` — метрики для данного изображения (gaze_groups, fixations, saccades, roi_metrics)
 - Fallback: если `test_dao`/`test_data` не переданы или файл не найден — записывает только `image_N/metrics.json`
+
+### 13.1. Детекция саккад — `saccade.py`
+
+**`detect_saccades(gaze_groups, velocities, *, threshold_factor=1.0, min_duration_ms=250.0)`** — выделяет саккады из потока точек взгляда:
+
+- Саккада начинается, когда скорость превышает `mean + threshold_factor * std`; заканчивается, когда скорость падает обратно до `mean` (state machine с гистерезисом)
+- `min_duration_ms` — фильтр коротких артефактов (по умолчанию 250 мс)
+- Возвращает список `Saccade(start_idx, end_idx, start_x, start_y, end_x, end_y, duration_ms)`
+
+**`Saccade`** — dataclass с полями `start_idx`, `end_idx`, `start_x`, `start_y`, `end_x`, `end_y`, `duration_ms` (`None` когда нет `time_ms` в данных).
 
 ### 14. Форматирование времени — `time_fmt.py`
 
@@ -504,7 +548,12 @@ JSON-хранилище настроек приложения в `~/.eyetracker/
 
 #### Тесты — `data/test/`
 
-Абстрактный интерфейс `TestDao` (ABC) с методами `create`, `update`, `load_all`, `load`, `delete`, `get_cover_path`, `get_image_path`. Позволяет подменять реализацию (локальная ↔ удалённая).
+**`TestData`** — датакласс с полями `id`, `name`, `cover_filename`, `image_filenames`, `image_regions`. Поле `image_regions: dict[str, list[dict]]` хранит ROI-полигоны для каждого изображения (ключ = имя файла). По умолчанию — пустой словарь (обратная совместимость).
+
+Абстрактный интерфейс `TestDao` (ABC) с методами `create`, `update`, `load_all`, `load`, `delete`, `get_cover_path`, `get_image_path`, `save_regions`, `sync_roi_metrics`. Позволяет подменять реализацию (локальная ↔ удалённая).
+
+- **`save_regions(test_id, regions)`** — сохраняет только поле `image_regions` для существующего теста без перезаписи изображений.
+- **`sync_roi_metrics(test_id, record_service)`** — пересчитывает `roi_metrics` для всех записей теста по актуальным `image_regions` и сохраняет записи обратно.
 
 **`LocalTestDao`** — реализация для локальной файловой системы:
 
@@ -521,23 +570,37 @@ JSON-хранилище настроек приложения в `~/.eyetracker/
 
 При вызове `create()` файлы **копируются** из оригинального местоположения в директорию теста. Метаданные хранят только относительные имена файлов. При `update()` файлы сначала копируются во временную директорию (`<id>_tmp`), затем старая удаляется и tmp переименовывается — это позволяет безопасно обновлять тест, даже если источники указывают на файлы внутри самого теста.
 
+**`export_test_zip(test, dao, dest)`** (`data/test/export.py`) — экспортирует тест в ZIP-файл:
+- Все изображения (включая обложку) копируются в корень архива с оригинальными именами
+- `test.json` содержит: `name`, `cover` (относительный путь), `images` (список `{path, regions}`)
+- Поле `regions` — список ROI-полигонов для каждого изображения (нормализованные координаты)
+
+**`import_test_zip(zip_path, dao)`** (`data/test/import_zip.py`) — создаёт тест из ZIP-файла:
+- Распаковывает архив во временную директорию, читает `test.json`
+- Создаёт новый тест через `dao.create()`, затем сохраняет регионы через `dao.save_regions()`
+- Поднимает `ValueError` при отсутствии `test.json`, пустом `name` или пустом `images`; `FileNotFoundError` при отсутствующих файлах
+
 #### Записи результатов — `data/record/`
 
 Модели данных:
 - **`Record`** — полная запись: `id`, `test_id`, `user_login`, `started_at`, `finished_at`, `duration_ms`, `items: list[RecordItem]`, `created_at`
 - **`RecordItem`** — результат для одного изображения: `image_filename`, `image_index`, `metrics: RecordItemMetrics`
-- **`RecordItemMetrics`** — метрики: `gaze_groups` (список групп взгляда с `x`, `y`, `count`); `fixations` (список фиксаций, по умолчанию `[]` — обратная совместимость со старыми записями); `first_fixation_time_ms` (время первой фиксации в мс от начала показа изображения, `None` для старых записей)
+- **`RecordItemMetrics`** — метрики: `gaze_groups` (список групп взгляда с `x`, `y`, `count`); `fixations` (список фиксаций, по умолчанию `[]` — обратная совместимость со старыми записями); `first_fixation_time_ms` (время первой фиксации в мс, `None` для старых записей); `saccades` (список саккад в виде dict, по умолчанию `[]`); `roi_metrics` (список dict `{"name", "color", "hit", "first_fixation_required"}`, по умолчанию `[]`)
 - **`RecordSummary`** — облегчённая версия Record без `items` (для списков)
 - **`RecordQuery`** — параметры запроса: `test_id`, `user_login`, `date_from`, `date_to`, `page`, `page_size`
 
-**`RecordService`** (ABC) — методы `save(record)`, `load(record_id)`, `query(query)`
+**`RecordQuery`** — параметры запроса: `test_id`, `user_login` (точное совпадение), `user_login_contains` (поиск подстроки, без учёта регистра), `date_from`/`date_to` (ISO-8601 строки), `roi_hits: dict[str, bool]` (фильтрация по попаданиям ROI: `True` = обязательное попадание, `False` = обязательный промах), `page`, `page_size`.
+
+**`RecordService`** (ABC) — методы `save(record)`, `load(record_id)`, `query(query)`, `suggest_users(params)`.
+
+- **`suggest_users(params)`** — возвращает отсортированный список уникальных логинов, соответствующих фильтрам `params` (поля `user_login` и `user_login_contains` игнорируются).
 
 **`LocalRecordService`** — хранит каждую запись как отдельный JSON-файл:
 ```
 ~/.eyetracker/records/<record_id>.json
 ```
 
-Метод `query()` возвращает `RecordListResult` с `list[RecordSummary]` (без загрузки тяжёлых items/metrics). Поддерживает фильтрацию по `test_id`, `user_login`, диапазону дат и пагинацию.
+Метод `query()` возвращает `RecordListResult` с `list[RecordSummary]` (без загрузки тяжёлых items/metrics). Поддерживает фильтрацию по `test_id`, `user_login`, `user_login_contains`, `roi_hits`, диапазону дат и пагинацию. Фильтрация по `roi_hits` требует загрузки полной записи для каждого кандидата.
 
 #### Авторизация — `data/login/`
 
@@ -551,11 +614,12 @@ JSON-хранилище настроек приложения в `~/.eyetracker/
 
 ### 16. Создание теста — UI
 
-- **`CreateTestChoicePage`** (`create_test_page.py`) — две карточки: "Форма" (создание через UI) и "TEST.json" (заглушка)
+- **`CreateTestChoicePage`** (`create_test_page.py`) — две карточки: "Форма" (создание через UI) и "Импортировать" (импорт из ZIP, сигнал `import_chosen`)
 - **`TestFormPage`** (`test_form_page.py`) — универсальная форма с тремя режимами (`FormMode.CREATE`, `VIEW`, `EDIT`):
   - **CREATE**: пустая форма, кнопка "Создать", запись через `TestDao.create()`
-  - **VIEW**: pre-populated readonly, поля заблокированы, нет кнопки "+", кнопки действий: Пройти / Результаты / Редактировать / Выгрузить Json / Удалить
-  - **EDIT**: pre-populated editable, кнопка "Сохранить", запись через `TestDao.update()`
+  - **VIEW**: pre-populated readonly, поля заблокированы, нет кнопки "+", кнопки действий: Пройти / Результаты / Редактировать / Выгрузить / Удалить
+  - **EDIT**: pre-populated editable, кнопка "Сохранить", запись через `TestDao.update()`; ROI редактирование через `ImageGridWidget.roi_saved` → `dao.save_regions()`
+  - **"Выгрузить"** → `export_test_zip()` → ZIP-архив с изображениями и `test.json` (включая ROI регионы)
 - **Сигналы TestFormPage**: `back_requested`, `edit_requested`, `run_test_requested`, `results_requested`, `test_updated`, `test_deleted`, `test_created`
 - **`ImageGridWidget`** (`image_grid.py`) — плиточная галерея с кнопкой "+" первой; плитки 16:9 (280×158), left-aligned, поддержка readonly режима:
   - **Drag-to-reorder**: Qt Native Drag & Drop (`QDrag` + `QMimeData`) для перестановки изображений в edit/create mode; полупрозрачный thumbnail при перетаскивании, подсветка целевой позиции
@@ -604,20 +668,26 @@ JSON-хранилище настроек приложения в `~/.eyetracker/
 
 #### Список записей — `records_list_page.py`
 
-**`RecordsListPage`** — таблица записей для конкретного теста:
-- `QTableWidget` с колонками: дата/время, пользователь, кнопка "Посмотреть отчет"
+**`RecordsListPage`** — таблица записей для конкретного теста с фильтрацией и агрегацией:
+- `QTableWidget` с колонками: дата/время, пользователь, кнопка "Посмотреть отчет" + кнопка выгрузить CSV
 - Empty state: "Пока нет прохождений"
-- Данные загружаются через `RecordService.query(RecordQuery(test_id=...))`
+- **Панель фильтров**: поле поиска по пользователю (автодополнение через `suggest_users`), диапазон дат (`QDateTimeEdit`), фильтрация по ROI (чекбоксы hit/miss)
+- Кнопка "Выгрузить CSV" — экспорт отфильтрованных записей в CSV-файл (все метрики + roi_metrics)
+- **Круговые диаграммы ROI** (`_PieChartWidget`): для каждой ROI теста показывает соотношение hit/miss по всем записям
+- Данные загружаются через `RecordService.query(RecordQuery(test_id=...))` с применением активных фильтров
 - Кнопка "← Назад" возвращает к странице теста
 
 #### Детали записи — `record_detail_page.py`
 
 **`RecordDetailPage`** — детальный просмотр одной записи:
 - Заголовок: название теста, логин пользователя, дата/время
-- **Горизонтальные табы** — кнопки с номерами изображений (1, 2, 3, ...). Клик по табу показывает тепловую карту выбранного изображения
-- Область контента: `QScrollArea` — тепловая карта взгляда (960×540), ниже — интерактивный блок фиксаций:
-  - Превью-изображение (960×540): при наведении на значок фиксации показывает точку фиксации через `generate_fixation_map()`
-  - Сетка значков фиксаций (4 в ряд, центрированно): каждый значок 108×61 пикселей, показывает `#N emotion` и время обнаружения в мс; наведение обновляет превью
+- **Горизонтальные табы** — кнопки с номерами изображений (1, 2, 3, ...). Клик по табу показывает содержимое для выбранного изображения
+- Область контента: `QScrollArea` — последовательно отображает:
+  1. **Тепловая карта взгляда** (960×540) с наложением ROI регионов (`overlay_rois`)
+  2. **ROI-метрики**: блок появляется если в тесте есть ROI; показывает для каждой области: попадание/промах, флаг "первая фиксация"
+  3. **Интерактивный блок фиксаций** — превью-изображение (960×540) + сетка значков `#N` (4 в ряд, 108×61 пикселей); наведение на значок обновляет превью через `generate_fixation_map()`
+  4. **Карта точек взгляда** (960×540) — `generate_gaze_points_map()`, точки окрашены по скорости
+  5. **Карта саккад** (960×540) — `generate_saccade_map()`, векторы-стрелки
 - При отсутствии исходного изображения (нет `test_dao` или файл не найден) — отображается сообщение об ошибке
 - Кнопка **"Выгрузить отчет"** — `QFileDialog.getSaveFileName()` → `export_record_zip()` → ZIP-архив с папками per-image
 
@@ -648,7 +718,9 @@ JSON-хранилище настроек приложения в `~/.eyetracker/
 | Настройки | `settings` | Выбор монитора, пропуск калибровки |
 | Помощь | `help` | FAQ со сворачиваемыми ответами |
 
-Пункты кроме "Обзор" скрыты до авторизации.
+Пункты кроме "Обзор" скрыты до авторизации. В верхнем правом углу sidebar (после авторизации) отображаются кнопки: **"⏻"** (закрыть приложение) и **"Выйти из аккаунта"** (logout, очищает `current_username` из настроек).
+
+Логин сохраняется в `Settings.current_username` для подстановки при записи результатов. Если `current_username == "admin"` (без учёта регистра), пользователь считается суперадминистратором (`_is_super_admin()`).
 
 ### Dependency Injection
 
@@ -692,7 +764,7 @@ Flow внутри `_content_stack` HomeScreen:
 3. "Редактировать" → `TestFormPage(mode=EDIT)` — редактирование
 4. "Сохранить" (успех) → `TestDao.update()`, остаётся на тесте в режиме VIEW
 5. "Удалить" → confirm dialog, `TestDao.delete()`, возврат в библиотеку, refresh
-6. "Выгрузить Json" → экспорт TEST.json через QFileDialog
+6. "Выгрузить" → `export_test_zip()` → ZIP-архив с изображениями и `test.json` (включая ROI)
 7. "← Назад" → возврат в библиотеку, refresh
 
 ### История результатов — навигация
@@ -808,7 +880,7 @@ def _update_video(self):
 
 ## Тестирование
 
-114 unit-тестов (`pytest`):
+131 unit-тест (`pytest`):
 
 | Файл | Кол-во | Что проверяет |
 |------|--------|---------------|
@@ -818,16 +890,18 @@ def _update_video(self):
 | `test_precision.py` | 4 | PrecisionCalculator: хранение точек, расчёт precision |
 | `test_settings.py` | 9 | Settings: save/load, corrupted JSON fallback, default values, auth_token, skip_calibration, last_opened_test_id |
 | `test_monitor.py` | 4 | resolve_screen, format_screen_label |
-| `test_test_dao.py` | 15 | LocalTestDao: create, update, load_all, load, delete, corrupt JSON, уникальные ID |
+| `test_test_dao.py` | 17 | LocalTestDao: create, update, load_all, load, delete, corrupt JSON, уникальные ID, save_regions, load старого теста без regions |
 | `test_create_test_form.py` | 6 | validate_form: пустое имя, нет обложки, нет изображений, множественные ошибки |
 | `test_draft_cache.py` | 8 | DraftCache: save/load/clear, corrupted JSON, missing file |
 | `test_login_service.py` | 3 | LocalLoginService: успешный логин, возврат токена |
 | `test_metrics.py` | 5 | GazeMetricsAggregator: нормализация, группировка, пустые данные |
 | `test_record_service.py` | 8 | LocalRecordService: save/load, query с фильтрами, RecordSummary, user_login |
 | `test_heatmap.py` | 10 | _build_density: форма, пик, масштабирование, накопление, граничные координаты; generate_heatmap: форма, dtype, пустые группы, горячая точка, отсутствующий файл; save_heatmap: запись файла |
-| `test_report_export.py` | 8 | ZIP fallback (только metrics.json), полная структура папок, содержимое metrics.json, корректность heatmap PNG, graceful fallback при отсутствии файла |
+| `test_report_export.py` | 7 | ZIP fallback (только metrics.json), полная структура папок, содержимое metrics.json, graceful fallback при отсутствии файла |
 | `test_time_fmt.py` | 4 | format_datetime: ISO 8601, timezone, невалидная строка |
 | `test_fixation.py` | 5 | FixationDetector: детекция фиксации, нет фиксации при разбросе, флаг первой фиксации, state machine / debounce, вытеснение точек из окна |
+| `test_test_export.py` | 6 | export_test_zip: ZIP содержит изображения и test.json, имя/обложка/пути, включение регионов, порядок изображений |
+| `test_test_import.py` | 9 | import_test_zip: создание теста, сохранение в DAO, копирование изображений, количество, регионы, дефолт без регионов, ошибки при bad zip/отсутствии test.json/пустом имени |
 
 Запуск:
 ```bash
