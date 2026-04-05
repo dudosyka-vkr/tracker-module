@@ -29,9 +29,10 @@ from eyetracker.ui.theme import (
 
 
 class TestLibraryPage(QWidget):
-    """Grid of test tiles with cover + name. Empty state when no tests."""
+    """Grid of test tiles with cover + name. First tile is always '+ New'."""
 
     test_selected = pyqtSignal(str)  # emits test ID
+    create_requested = pyqtSignal()
 
     def __init__(self, dao: TestDao, parent: QWidget | None = None):
         super().__init__(parent)
@@ -55,28 +56,6 @@ class TestLibraryPage(QWidget):
         title.setStyleSheet(f"color: {TEXT_PRIMARY}; background: transparent;")
         header_layout.addWidget(title)
         root.addWidget(header)
-
-        # -- empty state (shown/hidden dynamically) --------------------------
-        self._empty_widget = QWidget()
-        self._empty_widget.setStyleSheet(f"background-color: {BG_MAIN};")
-        empty_layout = QVBoxLayout(self._empty_widget)
-        empty_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        empty_label = QLabel("Нет тестов")
-        empty_label.setFont(QFont(FONT_FAMILY, 20))
-        empty_label.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent;")
-        empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        empty_hint = QLabel("Создайте тест через пункт «Создать тест» в меню")
-        empty_hint.setFont(QFont(FONT_FAMILY, 14))
-        empty_hint.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent;")
-        empty_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        empty_layout.addWidget(empty_label)
-        empty_layout.addSpacing(8)
-        empty_layout.addWidget(empty_hint)
-
-        root.addWidget(self._empty_widget)
 
         # -- scrollable grid -------------------------------------------------
         self._grid_container = QWidget()
@@ -124,20 +103,58 @@ class TestLibraryPage(QWidget):
         for c in range(layout.columnCount()):
             layout.setColumnStretch(c, 0)
 
-        has_tests = len(self._tests) > 0
-        self._empty_widget.setVisible(not has_tests)
-        self._scroll.setVisible(has_tests)
-
-        if not has_tests:
-            return
-
         cols = max(1, self._cols)
-        for idx, test in enumerate(self._tests):
+
+        # "+" tile is always first
+        add_tile = self._make_add_tile()
+        layout.addWidget(add_tile, 0, 0)
+
+        for idx, test in enumerate(self._tests, start=1):
             row, col = divmod(idx, cols)
             tile = self._make_tile(test)
             layout.addWidget(tile, row, col)
 
         layout.setColumnStretch(cols, 1)
+
+    def _make_add_tile(self) -> QWidget:
+        tile = QPushButton()
+        tile.setFixedSize(TILE_W, TILE_H + 36)
+        tile.setCursor(Qt.CursorShape.PointingHandCursor)
+        tile.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {BG_SIDEBAR};
+                border: 2px dashed {BORDER_COLOR};
+                border-radius: {CORNER_RADIUS}px;
+                color: {TEXT_SECONDARY};
+            }}
+            QPushButton:hover {{
+                border-color: {TEXT_SECONDARY};
+                color: {TEXT_PRIMARY};
+            }}
+        """)
+        tile.clicked.connect(self.create_requested.emit)
+
+        layout = QVBoxLayout(tile)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(4)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        plus = QLabel("+")
+        plus.setFont(QFont(FONT_FAMILY, 32))
+        plus.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        plus.setStyleSheet(f"background: transparent; color: {TEXT_SECONDARY};")
+        plus.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
+        hint = QLabel("Создать тест")
+        hint.setFont(QFont(FONT_FAMILY, 12))
+        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        hint.setStyleSheet(f"background: transparent; color: {TEXT_SECONDARY};")
+        hint.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
+        layout.addWidget(plus)
+        layout.addWidget(hint)
+
+        return tile
 
     def _make_tile(self, test: TestData) -> QWidget:
         tile = QPushButton()

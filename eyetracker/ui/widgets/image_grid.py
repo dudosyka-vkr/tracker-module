@@ -8,6 +8,7 @@ from PyQt6.QtCore import QMimeData, QPoint, QRect, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QDrag, QFont, QIcon, QKeyEvent, QPainter, QPen, QPixmap, QPolygon
 from PyQt6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QGridLayout,
     QLabel,
     QLineEdit,
@@ -146,6 +147,17 @@ class ImagePreviewOverlay(QWidget):
         self._color_btn.setVisible(False)
         self._update_color_btn_style()
 
+        self._first_fixation_cb = QCheckBox("Первая точка фиксации", self)
+        self._first_fixation_cb.setFont(_font)
+        self._first_fixation_cb.setStyleSheet("""
+            QCheckBox { color: white; background: transparent; spacing: 8px; }
+            QCheckBox::indicator { width: 18px; height: 18px; border-radius: 4px;
+                border: 2px solid #4b5563; background: rgba(40,40,40,210); }
+            QCheckBox::indicator:checked { background: #2563eb; border-color: #2563eb; }
+            QCheckBox::indicator:hover { border-color: #9ca3af; }
+        """)
+        self._first_fixation_cb.setVisible(False)
+
     _CLOSE_HIT_RADIUS = 12
 
     def show_over_window(self) -> None:
@@ -208,6 +220,7 @@ class ImagePreviewOverlay(QWidget):
         self._add_btn.setVisible(in_viewing and self._roi_editing)
         self._name_input.setVisible(not in_viewing)
         self._color_btn.setVisible(not in_viewing)
+        self._first_fixation_cb.setVisible(not in_viewing)
         self._save_btn.setVisible(not in_viewing)
         self._cancel_btn.setVisible(not in_viewing)
         self._delete_btn.setVisible(in_roi_edit)
@@ -217,6 +230,7 @@ class ImagePreviewOverlay(QWidget):
         self._polygon_closed = False
         self._points.clear()
         self._name_input.clear()
+        self._first_fixation_cb.setChecked(False)
         self._save_btn.setEnabled(False)
         self._update_button_visibility()
         self._reposition_buttons()
@@ -258,6 +272,7 @@ class ImagePreviewOverlay(QWidget):
         roi = {
             "name": self._name_input.text().strip(),
             "color": self._current_color.name(),
+            "first_fixation": self._first_fixation_cb.isChecked(),
             "points": [{"x": x, "y": y} for x, y in self._points],
         }
         self._existing_rois = self._existing_rois + [roi]
@@ -273,6 +288,7 @@ class ImagePreviewOverlay(QWidget):
         self._name_input.setText(roi.get("name", ""))
         self._current_color = QColor(roi["color"]) if roi.get("color") else QColor(0, 220, 100)
         self._update_color_btn_style()
+        self._first_fixation_cb.setChecked(bool(roi.get("first_fixation", False)))
         self._save_btn.setEnabled(bool(self._name_input.text().strip()))
         self._update_button_visibility()
         self._reposition_buttons()
@@ -283,6 +299,7 @@ class ImagePreviewOverlay(QWidget):
         self._mode = "viewing"
         self._current_color = QColor(0, 220, 100)
         self._update_color_btn_style()
+        self._first_fixation_cb.setChecked(False)
         self._update_button_visibility()
         self._reposition_buttons()
         self.update()
@@ -293,6 +310,7 @@ class ImagePreviewOverlay(QWidget):
         roi = dict(self._existing_rois[self._selected_roi_idx])
         roi["name"] = self._name_input.text().strip()
         roi["color"] = self._current_color.name()
+        roi["first_fixation"] = self._first_fixation_cb.isChecked()
         rois = list(self._existing_rois)
         rois[self._selected_roi_idx] = roi
         self._existing_rois = rois
@@ -311,7 +329,14 @@ class ImagePreviewOverlay(QWidget):
     def _reposition_buttons(self) -> None:
         self._close_btn.move(self.width() - 50, 14)
         btn_h = 40
+        cb_h = 28
+        gap_rows = 10
         bottom_y = self.height() - btn_h - 24
+        if self._mode != "viewing":
+            cb_y = bottom_y - cb_h - gap_rows
+            self._first_fixation_cb.adjustSize()
+            cb_w = self._first_fixation_cb.sizeHint().width()
+            self._first_fixation_cb.setGeometry((self.width() - cb_w) // 2, cb_y, cb_w, cb_h)
         if self._mode == "viewing":
             self._add_btn.adjustSize()
             btn_w = max(self._add_btn.sizeHint().width() + 20, 240)
@@ -350,15 +375,31 @@ class ImagePreviewOverlay(QWidget):
             cx = int(sum(p.x() for p in pts) / len(pts))
             cy = int(sum(p.y() for p in pts) / len(pts))
             label = roi.get("name", "")
+            first_fixation = roi.get("first_fixation", False)
             fm = painter.fontMetrics()
             tw = fm.horizontalAdvance(label)
             th = fm.height()
             pad = 4
+            box_s = th - 2  # side length of the [1] square
+            box_gap = 6
+            content_w = (box_s + box_gap + tw) if first_fixation else tw
+            bg_x = cx - content_w // 2 - pad
+            bg_y = cy - th // 2 - pad
             painter.setBrush(QColor(0, 0, 0, 160))
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawRoundedRect(cx - tw // 2 - pad, cy - th // 2 - pad, tw + pad * 2, th + pad * 2, 4, 4)
+            painter.drawRoundedRect(bg_x, bg_y, content_w + pad * 2, th + pad * 2, 4, 4)
+            text_x = cx - content_w // 2
+            if first_fixation:
+                box_x = text_x
+                box_y = cy - box_s // 2
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.setPen(QPen(QColor(255, 255, 255, 200), 1))
+                painter.drawRoundedRect(box_x, box_y, box_s, box_s, 2, 2)
+                painter.setPen(QColor(255, 255, 255))
+                painter.drawText(QRect(box_x, box_y, box_s, box_s), Qt.AlignmentFlag.AlignCenter, "1")
+                text_x += box_s + box_gap
             painter.setPen(QColor(255, 255, 255))
-            painter.drawText(cx - tw // 2, cy + th // 2 - 2, label)
+            painter.drawText(text_x, cy + th // 2 - 2, label)
 
     def _draw_in_progress(self, painter: QPainter, img_rect: QRect) -> None:
         if not self._points:
@@ -498,40 +539,102 @@ class _DraggableTile(QWidget):
         path: str,
         pixmap: QPixmap | None,
         draggable: bool,
+        rois: list[dict] | None = None,
         parent: QWidget | None = None,
     ):
         super().__init__(parent)
         self._path = path
         self._pixmap = pixmap
         self._draggable = draggable
+        self._rois: list[dict] = rois or []
+        self._highlighted = False
         self._drag_start: QPoint | None = None
         self.setFixedSize(TILE_W, TILE_H)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
-        img = QLabel(self)
-        img.setFixedSize(TILE_W, TILE_H)
-        img.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        img.setStyleSheet(f"""
-            QLabel {{
-                background-color: {BG_SIDEBAR};
-                border: none;
-                border-radius: {CORNER_RADIUS}px;
-            }}
-        """)
-        img.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        if pixmap:
-            img.setPixmap(pixmap)
-        self._img_label = img
-
     def set_highlight(self, on: bool) -> None:
-        border = f"2px solid {BG_SIDEBAR_ACTIVE}" if on else "none"
-        self._img_label.setStyleSheet(f"""
-            QLabel {{
-                background-color: {BG_SIDEBAR};
-                border: {border};
-                border-radius: {CORNER_RADIUS}px;
-            }}
-        """)
+        self._highlighted = on
+        self.update()
+
+    def set_rois(self, rois: list[dict]) -> None:
+        self._rois = rois
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        # Background
+        painter.setBrush(QColor(BG_SIDEBAR))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(self.rect(), CORNER_RADIUS, CORNER_RADIUS)
+
+        # Image centred inside the tile
+        if self._pixmap:
+            x = (self.width() - self._pixmap.width()) // 2
+            y = (self.height() - self._pixmap.height()) // 2
+            painter.drawPixmap(x, y, self._pixmap)
+
+        # Highlight border
+        if self._highlighted:
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(QColor(BG_SIDEBAR_ACTIVE), 2))
+            painter.drawRoundedRect(1, 1, self.width() - 2, self.height() - 2, CORNER_RADIUS, CORNER_RADIUS)
+
+        # ROI badges
+        if self._rois:
+            self._paint_badges(painter)
+
+        painter.end()
+
+    def _paint_badges(self, painter: QPainter) -> None:
+        badge_h = 22
+        badge_gap = 4
+        margin_x = 6
+        margin_y = 6
+        pad_x = 8
+        box_s = 14  # size of the "1" square
+
+        font = QFont(FONT_FAMILY, 9)
+        painter.setFont(font)
+        fm = painter.fontMetrics()
+
+        y = self.height() - margin_y - badge_h
+        x = margin_x
+        for roi in self._rois:
+            name = roi.get("name", "")
+            first_fixation = roi.get("first_fixation", False)
+            base = QColor(roi["color"]) if roi.get("color") else QColor(0, 220, 100)
+            text_w = fm.horizontalAdvance(name)
+
+            if first_fixation:
+                badge_w = pad_x + box_s + 6 + text_w + pad_x
+            else:
+                badge_w = pad_x + text_w + pad_x
+
+            if x + badge_w > self.width() - margin_x:
+                break
+
+            pill = QRect(x, y, badge_w, badge_h)
+            painter.setBrush(QColor(base.red(), base.green(), base.blue(), 200))
+            painter.setPen(QPen(base.darker(130), 1))
+            painter.drawRoundedRect(pill, badge_h / 2, badge_h / 2)
+
+            painter.setPen(QColor(255, 255, 255))
+            if first_fixation:
+                box_x = x + (badge_h - box_s) // 2
+                box_y = y + (badge_h - box_s) // 2
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.setPen(QPen(QColor(255, 255, 255, 200), 1))
+                painter.drawRoundedRect(box_x, box_y, box_s, box_s, 3, 3)
+                painter.setPen(QColor(255, 255, 255))
+                painter.drawText(QRect(box_x, box_y, box_s, box_s), Qt.AlignmentFlag.AlignCenter, "1")
+                text_rect = QRect(box_x + box_s + 6, y, badge_w - (box_x - x + box_s + 6 + pad_x), badge_h)
+                painter.drawText(text_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, name)
+            else:
+                painter.drawText(pill, Qt.AlignmentFlag.AlignCenter, name)
+
+            x += badge_w + badge_gap
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
         if event.button() == Qt.MouseButton.LeftButton:
@@ -721,6 +824,10 @@ class ImageGridWidget(QWidget):
     def _on_overlay_roi_saved(self, filename: str, rois: list) -> None:
         self._regions[filename] = rois
         self.roi_saved.emit(filename, rois)
+        for i, path in enumerate(self._paths):
+            if Path(path).name == filename and i < len(self._tiles):
+                self._tiles[i].set_rois(rois)
+                break
 
     def _index_at_pos(self, pos: QPoint) -> int | None:
         """Return the image index (into self._paths) at the given widget position."""
@@ -783,7 +890,8 @@ class ImageGridWidget(QWidget):
             container.setFixedSize(TILE_W, TILE_H)
 
             draggable = not self._readonly
-            tile = _DraggableTile(path, pm, draggable=draggable, parent=container)
+            rois = self._regions.get(Path(path).name, [])
+            tile = _DraggableTile(path, pm, draggable=draggable, rois=rois, parent=container)
             tile.preview_requested.connect(self._on_preview_requested)
             self._tiles.append(tile)
 

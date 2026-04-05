@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import QApplication, QMainWindow, QMessageBox, QStackedWidg
 from eyetracker.core.gaze_points_map import _compute_velocities
 from eyetracker.core.monitor import resolve_screen
 from eyetracker.core.pipeline import EyeTracker
+from eyetracker.core.roi import compute_roi_metrics
 from eyetracker.core.saccade import detect_saccades
 from eyetracker.data.draft_cache import DraftCache
 from eyetracker.data.login import LocalLoginService
@@ -235,6 +236,9 @@ class App:
                 }
                 for s in raw_saccades
             ]
+            roi_metrics = compute_roi_metrics(
+                self._pending_test.image_regions, filename, fixations,
+            )
             items.append(RecordItem(
                 image_filename=filename,
                 image_index=idx,
@@ -243,6 +247,7 @@ class App:
                     fixations=fixations,
                     first_fixation_time_ms=first_fix_time,
                     saccades=saccades,
+                    roi_metrics=roi_metrics,
                 ),
             ))
 

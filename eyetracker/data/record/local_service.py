@@ -109,6 +109,7 @@ class LocalRecordService(RecordService):
                         fixations=it["metrics"].get("fixations", []),
                         first_fixation_time_ms=it["metrics"].get("first_fixation_time_ms"),
                         saccades=it["metrics"].get("saccades", []),
+                        roi_metrics=it["metrics"].get("roi_metrics", []),
                     ),
                 )
                 for it in data["items"]

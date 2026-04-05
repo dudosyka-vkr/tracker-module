@@ -7,7 +7,6 @@ from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
-    QMessageBox,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -25,9 +24,10 @@ from eyetracker.ui.theme import (
 
 
 class CreateTestChoicePage(QWidget):
-    """Two-card page: 'Form' or 'TEST.json'."""
+    """Two-card page: 'Form' or import from ZIP."""
 
     form_chosen = pyqtSignal()
+    import_chosen = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -61,10 +61,10 @@ class CreateTestChoicePage(QWidget):
             on_click=self._on_form,
         ))
         cards_row.addWidget(self._make_card(
-            icon="📁",
-            heading="TEST.json",
-            description="Загрузка папки\nтеста с TEST.json",
-            on_click=self._on_json,
+            icon="📦",
+            heading="Импортировать",
+            description="Загрузить тест\nиз ZIP архива",
+            on_click=self._on_import,
         ))
         root.addLayout(cards_row)
 
@@ -118,5 +118,5 @@ class CreateTestChoicePage(QWidget):
     def _on_form(self) -> None:
         self.form_chosen.emit()
 
-    def _on_json(self) -> None:
-        QMessageBox.information(self, "TEST.json", "Импорт из TEST.json будет добавлен позже")
+    def _on_import(self) -> None:
+        self.import_chosen.emit()

@@ -546,7 +546,21 @@ class TestFormPage(QWidget):
         self.results_requested.emit()
 
     def _on_export_clicked(self) -> None:
-        QMessageBox.information(self, "Выгрузить Json", "Скоро будет доступно")
+        if self._test_data is None:
+            return
+        default_name = f"{self._test_data.name}.zip"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Экспорт теста", default_name, "ZIP архив (*.zip)"
+        )
+        if not path:
+            return
+        try:
+            from eyetracker.data.test.export import export_test_zip
+            export_test_zip(self._test_data, self._dao, Path(path))
+            QMessageBox.information(self, "Готово", f"Тест экспортирован:\n{path}")
+        except Exception as exc:
+            logger.error("Export failed: %s", exc)
+            QMessageBox.warning(self, "Ошибка", f"Не удалось экспортировать тест:\n{exc}")
 
     def _on_delete_clicked(self) -> None:
         if self._test_data is None:

@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QComboBox,
+    QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -390,25 +391,41 @@ class HomeScreen(QWidget):
         outer = QVBoxLayout(page)
         outer.setContentsMargins(20, 20, 20, 20)
 
-        # Logout button — top right
+        # Top-right action row: [power] [logout from account]
         logout_row = QHBoxLayout()
         logout_row.addStretch()
-        logout_btn = QPushButton("Выйти")
-        logout_btn.setFixedSize(100, 36)
-        logout_btn.setFont(QFont(FONT_FAMILY, 13))
-        logout_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        logout_btn.clicked.connect(self._on_logout)
-        logout_btn.setStyleSheet(f"""
+
+        _btn_style = f"""
             QPushButton {{
                 background-color: {BG_SIDEBAR};
                 color: {TEXT_PRIMARY};
                 border: 1px solid {BORDER_COLOR};
                 border-radius: {CORNER_RADIUS}px;
+                padding: 0 20px;
             }}
             QPushButton:hover {{
                 background-color: {BG_SIDEBAR_HOVER};
             }}
-        """)
+        """
+
+        quit_btn = QPushButton("⏻")
+        quit_btn.setFixedHeight(44)
+        quit_btn.setFont(QFont(FONT_FAMILY, 16))
+        quit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        quit_btn.setToolTip("Закрыть приложение")
+        quit_btn.clicked.connect(QApplication.quit)
+        quit_btn.setStyleSheet(_btn_style)
+
+        logout_btn = QPushButton("Выйти из аккаунта")
+        logout_btn.setFixedHeight(44)
+        logout_btn.setFont(QFont(FONT_FAMILY, 15))
+        logout_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        logout_btn.setToolTip("Выйти из аккаунта")
+        logout_btn.clicked.connect(self._on_logout)
+        logout_btn.setStyleSheet(_btn_style)
+
+        logout_row.addWidget(quit_btn)
+        logout_row.addSpacing(8)
         logout_row.addWidget(logout_btn)
         outer.addLayout(logout_row)
 
@@ -1047,6 +1064,7 @@ class HomeScreen(QWidget):
     def _build_tests_page(self) -> QWidget:
         page = TestLibraryPage(dao=self._test_dao)
         page.test_selected.connect(self._show_test_detail)
+        page.create_requested.connect(lambda: self._select_sidebar_item("create_test"))
         return page
 
     def _show_test_detail(self, test_id: str, mode: FormMode = FormMode.VIEW) -> None:
@@ -1205,6 +1223,8 @@ class HomeScreen(QWidget):
             test_name=test.name,
             on_view_report=lambda rid, tn=test.name, tid=test_id: self._show_record_detail(rid, tn, tid),
             on_back=lambda tid=test_id: self._back_from_records_list(tid),
+            test_dao=self._test_dao,
+            test=test,
         )
         self._content_stack.addWidget(self._records_page)
         self._content_stack.setCurrentWidget(self._records_page)
@@ -1248,6 +1268,7 @@ class HomeScreen(QWidget):
     def _build_create_test_page(self) -> QWidget:
         page = CreateTestChoicePage()
         page.form_chosen.connect(self._show_create_test_form)
+        page.import_chosen.connect(self._on_import_test_chosen)
         return page
 
     def _show_create_test_form(self) -> None:
@@ -1273,6 +1294,24 @@ class HomeScreen(QWidget):
 
     def _on_test_created(self) -> None:
         self._show_create_test_choice()
+
+    def _on_import_test_chosen(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Импортировать тест", "", "ZIP архив (*.zip)"
+        )
+        if not path:
+            return
+        try:
+            from eyetracker.data.test.import_zip import import_test_zip
+            test = import_test_zip(Path(path), self._test_dao)
+        except Exception as exc:
+            QMessageBox.warning(self, "Ошибка", f"Не удалось импортировать тест:\n{exc}")
+            return
+
+        self._select_sidebar_item("tests")
+        self._show_test_detail(test.id, FormMode.EDIT)
+        if self._detail_page is not None:
+            self._detail_page._auto_save_draft()
 
     # ---- Keys ----------------------------------------------------------------
 

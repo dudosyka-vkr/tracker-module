@@ -24,6 +24,7 @@ from eyetracker.core.fixation_map import generate_fixation_map
 from eyetracker.core.gaze_points_map import generate_gaze_points_map, generate_saccade_map
 from eyetracker.core.heatmap import generate_heatmap
 from eyetracker.core.report_export import export_record_zip
+from eyetracker.core.roi import overlay_rois
 from eyetracker.core.time_fmt import format_datetime
 from eyetracker.data.record.service import Record, RecordItem, RecordService
 from eyetracker.data.test import TestDao, TestData
@@ -282,6 +283,9 @@ class RecordDetailPage(QWidget):
         self._clear_content()
         item = self._record.items[index]
 
+        roi_widget = self._build_roi_metrics_widget(item)
+        if roi_widget is not None:
+            self._content_layout.addWidget(roi_widget)
         self._content_layout.addWidget(self._build_heatmap_widget(item))
         self._content_layout.addWidget(self._build_gaze_points_widget(item))
         self._content_layout.addWidget(self._build_saccade_map_widget(item))
@@ -292,7 +296,7 @@ class RecordDetailPage(QWidget):
         container = QWidget()
         container.setStyleSheet("background: transparent;")
         vbox = QVBoxLayout(container)
-        vbox.setContentsMargins(0, 0, 0, 0)
+        vbox.setContentsMargins(0, 16, 0, 0)
         vbox.setSpacing(8)
 
         heading = QLabel("Тепловая карта")
@@ -315,6 +319,11 @@ class RecordDetailPage(QWidget):
         else:
             try:
                 rgb = generate_heatmap(image_path, item.metrics.gaze_groups)
+                rois = (
+                    self._test_data.image_regions.get(item.image_filename, [])
+                    if self._test_data is not None else []
+                )
+                rgb = overlay_rois(rgb, rois)
                 label.setPixmap(
                     _rgb_array_to_pixmap(rgb).scaled(
                         960, 540,
@@ -430,6 +439,10 @@ class RecordDetailPage(QWidget):
 
         sorted_fixations = sorted(fixations, key=lambda fx: 0 if fx.get("is_first") else 1)
         image_path = self._resolve_image_path(item)
+        item_rois = (
+            self._test_data.image_regions.get(item.image_filename, [])
+            if self._test_data is not None else []
+        )
 
         # --- Preview label ---
         preview = QLabel()
@@ -464,8 +477,9 @@ class RecordDetailPage(QWidget):
                 badge = _FixationBadge(
                     number=idx + 1,
                     emotion=fx.get("emotion", "—"),
-                    on_enter=lambda i=idx, _fx=sorted_fixations, _path=image_path, _lbl=preview:
-                        self._update_fixation_preview(_fx, i, _path, _lbl),
+                    on_enter=lambda i=idx, _fx=sorted_fixations, _path=image_path,
+                                    _lbl=preview, _rois=item_rois:
+                        self._update_fixation_preview(_fx, i, _path, _lbl, _rois),
                     time_ms=fx.get("time_ms"),
                 )
                 row_h.addWidget(badge)
@@ -481,11 +495,14 @@ class RecordDetailPage(QWidget):
         row: int,
         image_path,
         label: QLabel,
+        rois: list[dict] | None = None,
     ) -> None:
         if row < 0 or row >= len(fixations) or image_path is None or not image_path.exists():
             return
         try:
             rgb = generate_fixation_map(image_path, fixations[row], number=row + 1)
+            if rois:
+                rgb = overlay_rois(rgb, rois)
         except Exception:
             return
         pixmap = _rgb_array_to_pixmap(rgb)
@@ -501,6 +518,69 @@ class RecordDetailPage(QWidget):
         if self._test_dao is None or self._test_data is None:
             return None
         return self._test_dao.get_image_path(self._test_data, item.image_filename)
+
+    def _build_roi_metrics_widget(self, item: RecordItem) -> QWidget | None:
+        rois = item.metrics.roi_metrics
+        if not rois:
+            return None
+
+        container = QWidget()
+        container.setStyleSheet("background: transparent;")
+        vbox = QVBoxLayout(container)
+        vbox.setContentsMargins(0, 0, 0, 0)
+        vbox.setSpacing(8)
+
+        heading = QLabel("Зоны интереса")
+        heading.setFont(QFont(FONT_FAMILY, 16, QFont.Weight.Bold))
+        heading.setStyleSheet(f"color: {TEXT_PRIMARY}; background: transparent;")
+        vbox.addWidget(heading)
+
+        for roi in rois:
+            row = QWidget()
+            row.setStyleSheet(f"""
+                QWidget {{
+                    background-color: {BG_SIDEBAR};
+                    border: 1px solid {BORDER_COLOR};
+                    border-radius: {CORNER_RADIUS}px;
+                }}
+            """)
+            row.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(14, 10, 14, 10)
+            row_layout.setSpacing(10)
+
+            # Color swatch
+            color_str = roi.get("color", "#00dc64")
+            swatch = QLabel()
+            swatch.setFixedSize(14, 14)
+            swatch.setStyleSheet(f"""
+                background-color: {color_str};
+                border-radius: 3px;
+                border: none;
+            """)
+            row_layout.addWidget(swatch)
+
+            # Name + optional [1] badge
+            name_parts = []
+            if roi.get("first_fixation_required"):
+                name_parts.append("[1]")
+            name_parts.append(roi.get("name", ""))
+            name_lbl = QLabel("  ".join(name_parts))
+            name_lbl.setFont(QFont(FONT_FAMILY, 13))
+            name_lbl.setStyleSheet(f"color: {TEXT_PRIMARY}; background: transparent;")
+            row_layout.addWidget(name_lbl, stretch=1)
+
+            # Hit indicator
+            hit = roi.get("hit", False)
+            hit_lbl = QLabel("✓  Да" if hit else "✗  Нет")
+            hit_lbl.setFont(QFont(FONT_FAMILY, 13, QFont.Weight.Bold))
+            hit_color = "#4caf50" if hit else "#f44336"
+            hit_lbl.setStyleSheet(f"color: {hit_color}; background: transparent;")
+            row_layout.addWidget(hit_lbl)
+
+            vbox.addWidget(row)
+
+        return container
 
     # ------------------------------------------------------------------
     # Export

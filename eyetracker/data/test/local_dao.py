@@ -9,6 +9,8 @@ from dataclasses import asdict
 from pathlib import Path
 from uuid import uuid4
 
+from eyetracker.core.roi import compute_roi_metrics
+from eyetracker.data.record.service import RecordQuery, RecordService
 from eyetracker.data.test.dao import TestDao, TestData
 
 logger = logging.getLogger(__name__)
@@ -113,6 +115,23 @@ class LocalTestDao(TestDao):
                 t.image_regions = regions
                 break
         self._save_meta(tests)
+
+    def sync_roi_metrics(self, test_id: str, record_service: RecordService) -> None:
+        test = self.load(test_id)
+        if test is None:
+            return
+        result = record_service.query(RecordQuery(test_id=test_id, page_size=10_000))
+        for summary in result.items:
+            record = record_service.load(summary.id)
+            if record is None:
+                continue
+            for item in record.items:
+                item.metrics.roi_metrics = compute_roi_metrics(
+                    test.image_regions,
+                    item.image_filename,
+                    item.metrics.fixations,
+                )
+            record_service.save(record)
 
     # -- private helpers -----------------------------------------------------
 

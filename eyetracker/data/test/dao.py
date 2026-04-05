@@ -55,3 +55,12 @@ class TestDao(ABC):
     @abstractmethod
     def save_regions(self, test_id: str, regions: dict[str, list[dict]]) -> None:
         """Persist only the image_regions field for an existing test."""
+
+    @abstractmethod
+    def sync_roi_metrics(self, test_id: str, record_service: object) -> None:
+        """Recompute roi_metrics for every record that belongs to this test.
+
+        Uses the test's current image_regions and each record item's existing
+        fixations, then overwrites roi_metrics and saves the record back.
+        *record_service* must be a ``RecordService`` instance.
+        """
