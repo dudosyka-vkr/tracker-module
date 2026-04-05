@@ -46,6 +46,8 @@ eyetracker/
 │   │   ├── face_emotion.py                    # FaceEmotionRecognition — распознавание эмоций (заглушка)
 │   │   ├── heatmap.py                         # Генерация тепловой карты взгляда (Gaussian + JET colormap)
 │   │   ├── fixation_map.py                    # Рендер фиксационной карты (круг + номер + эмоция поверх изображения)
+│   │   ├── gaze_points_map.py                 # Карта точек взгляда и карта саккад (пунктирные векторы)
+│   │   ├── saccade.py                         # Детекция саккад по скорости (detect_saccades)
 │   │   ├── report_export.py                   # Экспорт записи в ZIP-архив (per-image папки)
 │   │   └── time_fmt.py                        # Форматирование ISO 8601 → DD.MM.YYYY HH:MM
 │   └── models/                                # Автоматически скачиваемая модель

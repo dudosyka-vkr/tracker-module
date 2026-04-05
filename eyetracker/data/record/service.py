@@ -13,6 +13,7 @@ class RecordItemMetrics:
     gaze_groups: list[dict]
     fixations: list[dict] = field(default_factory=list)
     first_fixation_time_ms: int | None = None
+    saccades: list[dict] = field(default_factory=list)
 
 
 @dataclass

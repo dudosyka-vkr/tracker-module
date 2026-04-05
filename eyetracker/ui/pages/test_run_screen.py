@@ -51,6 +51,7 @@ class TestRunScreen(QWidget):
             GazeMetricsAggregator() for _ in self._images
         ]
         self._fixations_per_image: list[list[dict]] = [[] for _ in self._images]
+        self._timed_gaze_per_image: list[list[tuple[float, float, int]]] = [[] for _ in self._images]
         self._first_fixation_recorded = False
         self._fixation_detector: FixationDetector | None = None
         self._emotion_recognizer = FaceEmotionRecognition()
@@ -87,6 +88,9 @@ class TestRunScreen(QWidget):
 
     def get_fixations(self) -> list[list[dict]]:
         return self._fixations_per_image
+
+    def get_timed_gaze(self) -> list[list[tuple[float, float, int]]]:
+        return list(self._timed_gaze_per_image)
 
     def start(self) -> None:
         if not self._images:
@@ -148,6 +152,11 @@ class TestRunScreen(QWidget):
         self._aggregators[self._current_index].add_point(
             x, y, self._screen_w, self._screen_h
         )
+        if self._image_started_at is not None:
+            time_ms = int(
+                (datetime.now(timezone.utc) - self._image_started_at).total_seconds() * 1000
+            )
+            self._timed_gaze_per_image[self._current_index].append((x, y, time_ms))
         if self._fixation_detector is not None:
             self._fixation_detector.on_gaze_point(x, y)
 

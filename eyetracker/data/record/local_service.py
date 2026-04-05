@@ -108,6 +108,7 @@ class LocalRecordService(RecordService):
                         gaze_groups=it["metrics"]["gaze_groups"],
                         fixations=it["metrics"].get("fixations", []),
                         first_fixation_time_ms=it["metrics"].get("first_fixation_time_ms"),
+                        saccades=it["metrics"].get("saccades", []),
                     ),
                 )
                 for it in data["items"]

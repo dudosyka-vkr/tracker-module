@@ -10,6 +10,7 @@ from pathlib import Path
 import cv2
 
 from eyetracker.core.fixation_map import generate_all_fixations_map
+from eyetracker.core.gaze_points_map import generate_gaze_points_map, generate_saccade_map
 from eyetracker.core.heatmap import generate_heatmap
 from eyetracker.data.record.service import Record
 from eyetracker.data.test import TestDao, TestData
@@ -77,6 +78,27 @@ def export_record_zip(
                     ok_fix, buf_fix = cv2.imencode(".png", bgr_fix)
                     if ok_fix:
                         zf.writestr(f"{folder}/fixation_map.png", buf_fix.tobytes())
+                except Exception:
+                    pass
+
+            # Gaze points map image
+            try:
+                rgb_gp = generate_gaze_points_map(image_path, item.metrics.gaze_groups)
+                bgr_gp = cv2.cvtColor(rgb_gp, cv2.COLOR_RGB2BGR)
+                ok_gp, buf_gp = cv2.imencode(".png", bgr_gp)
+                if ok_gp:
+                    zf.writestr(f"{folder}/gaze_points.png", buf_gp.tobytes())
+            except Exception:
+                pass
+
+            # Saccade map image
+            if item.metrics.saccades:
+                try:
+                    rgb_sc = generate_saccade_map(image_path, item.metrics.saccades)
+                    bgr_sc = cv2.cvtColor(rgb_sc, cv2.COLOR_RGB2BGR)
+                    ok_sc, buf_sc = cv2.imencode(".png", bgr_sc)
+                    if ok_sc:
+                        zf.writestr(f"{folder}/saccade_map.png", buf_sc.tobytes())
                 except Exception:
                     pass
 

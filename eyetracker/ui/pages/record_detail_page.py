@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
 )
 
 from eyetracker.core.fixation_map import generate_fixation_map
+from eyetracker.core.gaze_points_map import generate_gaze_points_map, generate_saccade_map
 from eyetracker.core.heatmap import generate_heatmap
 from eyetracker.core.report_export import export_record_zip
 from eyetracker.core.time_fmt import format_datetime
@@ -282,6 +283,8 @@ class RecordDetailPage(QWidget):
         item = self._record.items[index]
 
         self._content_layout.addWidget(self._build_heatmap_widget(item))
+        self._content_layout.addWidget(self._build_gaze_points_widget(item))
+        self._content_layout.addWidget(self._build_saccade_map_widget(item))
         self._content_layout.addWidget(self._build_fixation_list(item))
         self._content_layout.addStretch()
 
@@ -321,6 +324,86 @@ class RecordDetailPage(QWidget):
                 )
             except Exception:
                 label.setText("Ошибка генерации тепловой карты")
+
+        vbox.addWidget(label)
+        return container
+
+    def _build_gaze_points_widget(self, item: RecordItem) -> QWidget:
+        container = QWidget()
+        container.setStyleSheet("background: transparent;")
+        vbox = QVBoxLayout(container)
+        vbox.setContentsMargins(0, 16, 0, 0)
+        vbox.setSpacing(8)
+
+        heading = QLabel("Карта точек взгляда")
+        heading.setFont(QFont(FONT_FAMILY, 16, QFont.Weight.Bold))
+        heading.setStyleSheet(f"color: {TEXT_PRIMARY}; background: transparent;")
+        vbox.addWidget(heading)
+
+        label = QLabel()
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        label.setFixedHeight(540)
+        label.setStyleSheet(
+            f"background-color: {BG_SIDEBAR}; border: 1px solid {BORDER_COLOR};"
+            f" border-radius: {CORNER_RADIUS}px; color: {TEXT_SECONDARY};"
+        )
+
+        image_path = self._resolve_image_path(item)
+        if image_path is None or not image_path.exists():
+            label.setText(f"Изображение не найдено: {item.image_filename}")
+        else:
+            try:
+                rgb = generate_gaze_points_map(image_path, item.metrics.gaze_groups)
+                label.setPixmap(
+                    _rgb_array_to_pixmap(rgb).scaled(
+                        960, 540,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                )
+            except Exception:
+                label.setText("Ошибка генерации карты точек")
+
+        vbox.addWidget(label)
+        return container
+
+    def _build_saccade_map_widget(self, item: RecordItem) -> QWidget:
+        container = QWidget()
+        container.setStyleSheet("background: transparent;")
+        vbox = QVBoxLayout(container)
+        vbox.setContentsMargins(0, 16, 0, 0)
+        vbox.setSpacing(8)
+
+        heading = QLabel("Карта саккад")
+        heading.setFont(QFont(FONT_FAMILY, 16, QFont.Weight.Bold))
+        heading.setStyleSheet(f"color: {TEXT_PRIMARY}; background: transparent;")
+        vbox.addWidget(heading)
+
+        label = QLabel()
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        label.setFixedHeight(540)
+        label.setStyleSheet(
+            f"background-color: {BG_SIDEBAR}; border: 1px solid {BORDER_COLOR};"
+            f" border-radius: {CORNER_RADIUS}px; color: {TEXT_SECONDARY};"
+        )
+
+        image_path = self._resolve_image_path(item)
+        if image_path is None or not image_path.exists():
+            label.setText(f"Изображение не найдено: {item.image_filename}")
+        else:
+            try:
+                rgb = generate_saccade_map(image_path, item.metrics.saccades)
+                label.setPixmap(
+                    _rgb_array_to_pixmap(rgb).scaled(
+                        960, 540,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                )
+            except Exception:
+                label.setText("Ошибка генерации карты саккад")
 
         vbox.addWidget(label)
         return container
