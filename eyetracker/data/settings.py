@@ -11,6 +11,8 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_PATH = Path.home() / ".eyetracker" / "settings.json"
 
+_DEFAULT_SERVER_URL: str | None = "https://vkr.dudosyka.ru"
+
 
 class Settings:
     """Read/write application settings from a JSON file.
@@ -130,6 +132,32 @@ class Settings:
             self._data["current_username"] = value
         else:
             self._data.pop("current_username", None)
+        self._save()
+
+    @property
+    def user_role(self) -> str | None:
+        """Role of the currently logged-in user (USER / ADMIN / SUPER_ADMIN). None when logged out."""
+        return self._data.get("user_role")
+
+    @user_role.setter
+    def user_role(self, value: str | None) -> None:
+        if value is None:
+            self._data.pop("user_role", None)
+        else:
+            self._data["user_role"] = value
+        self._save()
+
+    @property
+    def server_url(self) -> str | None:
+        """Backend server base URL. None means local-only mode."""
+        return self._data.get("server_url", _DEFAULT_SERVER_URL)
+
+    @server_url.setter
+    def server_url(self, value: str | None) -> None:
+        if value is None:
+            self._data.pop("server_url", None)
+        else:
+            self._data["server_url"] = value
         self._save()
 
     @property

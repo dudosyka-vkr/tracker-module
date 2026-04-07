@@ -17,6 +17,9 @@ class LocalLoginService(LoginService):
         token = self._generate_fake_jwt(username)
         return AuthResult(token=token, username=username)
 
+    def register(self, username: str, password: str) -> AuthResult:
+        return self.login(username, password)
+
     @staticmethod
     def _generate_fake_jwt(username: str) -> str:
         header = base64.urlsafe_b64encode(

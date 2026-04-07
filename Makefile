@@ -2,6 +2,7 @@
 
 CAMERA  ?=0
 VERBOSE ?=
+URL     ?=
 
 RUN_ARGS := --camera $(CAMERA)
 ifneq ($(VERBOSE),)
@@ -62,7 +63,17 @@ test-verbose:
 	poetry run pytest -v
 
 build:
-	poetry run pyinstaller eyetracker.spec --distpath dist --workpath build --noconfirm
+	@if [ -n "$(URL)" ]; then \
+		cp eyetracker/data/settings.py eyetracker/data/settings.py.bak; \
+		poetry run python -c "import re, pathlib; p=pathlib.Path('eyetracker/data/settings.py'); p.write_text(re.sub(r'_DEFAULT_SERVER_URL: str \| None = .*', '_DEFAULT_SERVER_URL: str | None = \"$(URL)\"', p.read_text()))"; \
+		echo "Baking server URL: $(URL)"; \
+	fi
+	@poetry run pyinstaller eyetracker.spec --distpath dist --workpath build --noconfirm; \
+	BUILD_EXIT=$$?; \
+	if [ -n "$(URL)" ]; then \
+		mv eyetracker/data/settings.py.bak eyetracker/data/settings.py; \
+	fi; \
+	exit $$BUILD_EXIT
 	@if [ "$$(uname)" = "Darwin" ]; then \
 		codesign --deep --force --sign - --entitlements entitlements.plist dist/EyeTracker.app; \
 		echo "Built and signed: dist/EyeTracker.app"; \
@@ -84,6 +95,7 @@ help:
 	@echo "  make test           Run tests"
 	@echo "  make test-verbose   Run tests with verbose output"
 	@echo "  make build          Build standalone app (.exe on Windows, .app on macOS)"
+	@echo "  make build URL=X    Build with X baked in as the default server URL"
 	@echo "  make clean          Remove __pycache__, .pytest_cache, build, dist"
 	@echo "  make help           Show this help"
 	@echo ""

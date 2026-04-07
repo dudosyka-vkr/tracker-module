@@ -161,6 +161,8 @@ class HomeScreen(QWidget):
         self._logged_in = logged_in
         for item_id, btn in self._sidebar_buttons.items():
             btn.setVisible(item_id == "overview" or logged_in)
+        if hasattr(self, "_admin_section"):
+            self._admin_section.setVisible(self._is_super_admin())
         if logged_in:
             self._overview_stack.setCurrentWidget(self._dashboard_page)
             self._refresh_dashboard()
@@ -273,6 +275,8 @@ class HomeScreen(QWidget):
         return page
 
     def _build_login_form(self) -> QWidget:
+        self._form_mode = "login"  # "login" | "register"
+
         page = QWidget()
         page.setStyleSheet(f"background-color: {BG_MAIN};")
 
@@ -315,7 +319,7 @@ class HomeScreen(QWidget):
         self._password_input.setFixedWidth(320)
         self._password_input.setFont(QFont(FONT_FAMILY, 14))
         self._password_input.setStyleSheet(input_style)
-        self._password_input.returnPressed.connect(self._on_login_click)
+        self._password_input.returnPressed.connect(self._on_submit_click)
 
         self._login_error = QLabel("")
         self._login_error.setFont(QFont(FONT_FAMILY, 12))
@@ -328,7 +332,7 @@ class HomeScreen(QWidget):
         self._login_btn.setFixedSize(320, 44)
         self._login_btn.setFont(QFont(FONT_FAMILY, 15, QFont.Weight.Bold))
         self._login_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._login_btn.clicked.connect(self._on_login_click)
+        self._login_btn.clicked.connect(self._on_submit_click)
         self._login_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: {BUTTON_BG};
@@ -345,6 +349,16 @@ class HomeScreen(QWidget):
             }}
         """)
 
+        self._toggle_form_btn = QPushButton("Нет аккаунта? Зарегистрироваться")
+        self._toggle_form_btn.setFixedWidth(320)
+        self._toggle_form_btn.setFont(QFont(FONT_FAMILY, 13))
+        self._toggle_form_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._toggle_form_btn.setFlat(True)
+        self._toggle_form_btn.setStyleSheet(
+            f"color: {BUTTON_BG}; background: transparent; border: none;"
+        )
+        self._toggle_form_btn.clicked.connect(self._on_toggle_form_mode)
+
         vbox.addWidget(title)
         vbox.addSpacing(10)
         vbox.addWidget(desc)
@@ -356,10 +370,26 @@ class HomeScreen(QWidget):
         vbox.addWidget(self._login_error, alignment=Qt.AlignmentFlag.AlignCenter)
         vbox.addSpacing(10)
         vbox.addWidget(self._login_btn, alignment=Qt.AlignmentFlag.AlignCenter)
+        vbox.addSpacing(8)
+        vbox.addWidget(self._toggle_form_btn, alignment=Qt.AlignmentFlag.AlignCenter)
 
         return page
 
-    def _on_login_click(self) -> None:
+    def _on_toggle_form_mode(self) -> None:
+        if self._form_mode == "login":
+            self._form_mode = "register"
+            self._login_btn.setText("Зарегистрироваться")
+            self._toggle_form_btn.setText("Уже есть аккаунт? Войти")
+        else:
+            self._form_mode = "login"
+            self._login_btn.setText("Войти")
+            self._toggle_form_btn.setText("Нет аккаунта? Зарегистрироваться")
+        self._login_input.clear()
+        self._password_input.clear()
+        self._login_error.hide()
+        self._login_input.setFocus()
+
+    def _on_submit_click(self) -> None:
         username = self._login_input.text().strip()
         password = self._password_input.text().strip()
 
@@ -372,15 +402,23 @@ class HomeScreen(QWidget):
         self._login_error.hide()
 
         try:
-            result = self._login_service.login(username, password)
+            if self._form_mode == "register":
+                result = self._login_service.register(username, password)
+            else:
+                result = self._login_service.login(username, password)
             self._settings.auth_token = result.token
             self._settings.current_username = username
+            self._settings.user_role = result.role
             self._current_username = username
             self._login_input.clear()
             self._password_input.clear()
+            self._form_mode = "login"
+            self._login_btn.setText("Войти")
+            self._toggle_form_btn.setText("Нет аккаунта? Зарегистрироваться")
             self._update_auth_state(True)
         except Exception as exc:
-            self._login_error.setText(f"Ошибка входа: {exc}")
+            action = "регистрации" if self._form_mode == "register" else "входа"
+            self._login_error.setText(f"Ошибка {action}: {exc}")
             self._login_error.show()
         finally:
             self._login_btn.setEnabled(True)
@@ -613,9 +651,15 @@ class HomeScreen(QWidget):
         else:
             self._select_sidebar_item("tests")
 
-    def _on_logout(self) -> None:
+    def logout(self) -> None:
+        """Force logout — clears stored token and returns to login view."""
         self._settings.auth_token = None
+        self._settings.current_username = ""
+        self._settings.user_role = None
         self._update_auth_state(False)
+
+    def _on_logout(self) -> None:
+        self.logout()
 
     # ---- Other content pages -------------------------------------------------
 
@@ -666,6 +710,9 @@ class HomeScreen(QWidget):
         return page
 
     def _is_super_admin(self) -> bool:
+        role = self._settings.user_role
+        if role is not None:
+            return role == "SUPER_ADMIN"
         return self._current_username.lower() == "admin"
 
     def _build_settings_page(self) -> QWidget:
@@ -881,6 +928,37 @@ class HomeScreen(QWidget):
         admin_vbox.addWidget(self._fixation_window_spin)
         admin_vbox.addWidget(window_desc)
 
+        server_url_label = QLabel("URL сервера")
+        server_url_label.setFont(QFont(FONT_FAMILY, 14))
+        server_url_label.setStyleSheet(f"color: {TEXT_PRIMARY}; background: transparent;")
+
+        self._server_url_edit = QLineEdit()
+        self._server_url_edit.setFixedWidth(400)
+        self._server_url_edit.setFont(QFont(FONT_FAMILY, 14))
+        self._server_url_edit.setPlaceholderText("http://localhost:8080")
+        self._server_url_edit.setText(self._settings.server_url or "")
+        self._server_url_edit.setStyleSheet(f"""
+            QLineEdit {{
+                background-color: {BG_SIDEBAR};
+                color: {TEXT_PRIMARY};
+                border: 1px solid {BORDER_COLOR};
+                border-radius: {CORNER_RADIUS}px;
+                padding: 8px 12px;
+            }}
+        """)
+        self._server_url_edit.editingFinished.connect(self._on_server_url_changed)
+
+        server_url_desc = QLabel("Адрес бэкенда. Оставьте пустым для локального режима.")
+        server_url_desc.setFont(QFont(FONT_FAMILY, 12))
+        server_url_desc.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent;")
+
+        admin_vbox.addSpacing(16)
+        admin_vbox.addWidget(server_url_label)
+        admin_vbox.addSpacing(8)
+        admin_vbox.addWidget(self._server_url_edit)
+        admin_vbox.addWidget(server_url_desc)
+
+        self._admin_section = admin_section
         admin_section.setVisible(self._is_super_admin())
         vbox.addWidget(admin_section)
         vbox.addStretch()
@@ -931,6 +1009,10 @@ class HomeScreen(QWidget):
 
     def _on_fixation_window_changed(self, samples: int) -> None:
         self._settings.fixation_window_size_samples = samples
+
+    def _on_server_url_changed(self) -> None:
+        url = self._server_url_edit.text().strip()
+        self._settings.server_url = url if url else None
 
     # ---- Help page ------------------------------------------------------------
 

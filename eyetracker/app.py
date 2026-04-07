@@ -15,15 +15,16 @@ from eyetracker.core.pipeline import EyeTracker
 from eyetracker.core.roi import compute_roi_metrics
 from eyetracker.core.saccade import detect_saccades
 from eyetracker.data.draft_cache import DraftCache
-from eyetracker.data.login import LocalLoginService
+from eyetracker.data.login import ApiLoginService, LocalLoginService
 from eyetracker.data.record import (
+    ApiRecordService,
     LocalRecordService,
     Record,
     RecordItem,
     RecordItemMetrics,
 )
 from eyetracker.data.settings import Settings
-from eyetracker.data.test import LocalTestDao, TestData
+from eyetracker.data.test import ApiTestDao, LocalTestDao, TestData
 from eyetracker.ui.pages.calibration import CalibrationScreen
 from eyetracker.ui.pages.home import HomeScreen
 from eyetracker.ui.pages.test_run_screen import TestRunScreen
@@ -48,10 +49,20 @@ class App:
             QMessageBox QPushButton:hover { background-color: #4a4a4a; }
         """)
         self._settings = Settings()
-        self._test_dao = LocalTestDao()
-        self._login_service = LocalLoginService()
         self._draft_cache = DraftCache()
-        self._record_service = LocalRecordService()
+
+        server_url = self._settings.server_url
+        self._api_client = None
+        if server_url:
+            from eyetracker.data.http_client import HttpClient
+            self._api_client = HttpClient(server_url, token=self._settings.auth_token)
+            self._test_dao = ApiTestDao(self._api_client)
+            self._login_service = ApiLoginService(self._api_client)
+            self._record_service = ApiRecordService(self._api_client)
+        else:
+            self._test_dao = LocalTestDao()
+            self._login_service = LocalLoginService()
+            self._record_service = LocalRecordService()
 
         self._window = QMainWindow()
         self._window.setWindowTitle("EyeTracker")
@@ -69,6 +80,9 @@ class App:
             record_service=self._record_service,
             on_monitor_changed=self._move_to_target_screen,
         )
+        if self._api_client is not None:
+            self._api_client.on_unauthorized = self._home.logout
+
         self._calibration: CalibrationScreen | None = None
         self._test_run_screen: TestRunScreen | None = None
         self._pending_test = None

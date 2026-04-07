@@ -12,6 +12,7 @@ class AuthResult:
 
     token: str
     username: str
+    role: str | None = None
 
 
 class LoginService(ABC):
@@ -23,3 +24,7 @@ class LoginService(ABC):
     @abstractmethod
     def login(self, username: str, password: str) -> AuthResult:
         """Authenticate a user and return an AuthResult with a JWT token."""
+
+    @abstractmethod
+    def register(self, username: str, password: str) -> AuthResult:
+        """Register a new user and return an AuthResult with a JWT token."""

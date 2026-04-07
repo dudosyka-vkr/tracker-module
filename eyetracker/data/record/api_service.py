@@ -1,0 +1,149 @@
+"""Remote HTTP implementation of RecordService."""
+
+from __future__ import annotations
+
+from eyetracker.data.http_client import ApiError, HttpClient
+from eyetracker.data.record.service import (
+    Record,
+    RecordItem,
+    RecordItemMetrics,
+    RecordListResult,
+    RecordQuery,
+    RecordService,
+    RecordSummary,
+)
+
+
+class ApiRecordService(RecordService):
+    """Persists and queries records via the backend REST API."""
+
+    def __init__(self, client: HttpClient) -> None:
+        self._client = client
+
+    # -- public API -----------------------------------------------------------
+
+    def save(self, record: Record) -> None:
+        test_resp = self._client.get(f"/tests/{record.test_id}")
+        image_ids: list[int] = test_resp["imageIds"]
+
+        items = []
+        for item in record.items:
+            index = int(item.image_filename)
+            items.append({
+                "imageId": image_ids[index],
+                "metrics": {
+                    "gazeGroups": item.metrics.gaze_groups,
+                    "fixations": item.metrics.fixations,
+                    "firstFixationTimeMs": item.metrics.first_fixation_time_ms,
+                    "saccades": item.metrics.saccades,
+                    "roiMetrics": [],
+                },
+            })
+
+        self._client.post("/records", json={
+            "testId": int(record.test_id),
+            "startedAt": record.started_at,
+            "finishedAt": record.finished_at,
+            "durationMs": record.duration_ms,
+            "items": items,
+        })
+
+    def query(self, params: RecordQuery) -> RecordListResult:
+        try:
+            query_params = self._build_query_params(params)
+            resp = self._client.get("/records", params=query_params)
+        except ApiError:
+            return RecordListResult(items=[], page=params.page, page_size=params.page_size, total=0)
+        summaries = [_parse_summary(item) for item in resp["items"]]
+        return RecordListResult(
+            items=summaries,
+            page=resp["page"],
+            page_size=resp["pageSize"],
+            total=resp["total"],
+        )
+
+    def load(self, record_id: str) -> Record | None:
+        try:
+            resp = self._client.get(f"/records/{record_id}")
+        except ApiError:
+            return None
+
+        test_resp = self._client.get(f"/tests/{resp['testId']}")
+        image_ids: list[int] = test_resp["imageIds"]
+
+        items = []
+        for item_data in resp["items"]:
+            image_id = item_data["imageId"]
+            try:
+                image_index = image_ids.index(image_id)
+            except ValueError:
+                image_index = 0
+            m = item_data.get("metrics", {})
+            items.append(RecordItem(
+                image_filename=str(image_index),
+                image_index=image_index,
+                metrics=RecordItemMetrics(
+                    gaze_groups=m.get("gazeGroups", []),
+                    fixations=m.get("fixations", []),
+                    first_fixation_time_ms=m.get("firstFixationTimeMs"),
+                    saccades=m.get("saccades", []),
+                    roi_metrics=m.get("roiMetrics", []),
+                ),
+            ))
+
+        return Record(
+            id=str(resp["id"]),
+            test_id=str(resp["testId"]),
+            user_login=resp["userLogin"],
+            started_at=resp["startedAt"],
+            finished_at=resp["finishedAt"],
+            duration_ms=resp["durationMs"],
+            items=items,
+            created_at=resp["createdAt"],
+        )
+
+    def suggest_users(self, params: RecordQuery) -> list[str]:
+        try:
+            query_params = self._build_query_params(params, skip_user_fields=True)
+            resp = self._client.get("/records/users/suggest", params=query_params)
+        except ApiError:
+            return []
+        return resp["items"]
+
+    # -- private helpers ------------------------------------------------------
+
+    def _build_query_params(
+        self, params: RecordQuery, skip_user_fields: bool = False
+    ) -> list[tuple]:
+        result: list[tuple] = []
+
+        if params.test_id is not None:
+            result.append(("testId", int(params.test_id)))
+        if not skip_user_fields:
+            if params.user_login is not None:
+                result.append(("userLogin", params.user_login))
+            if params.user_login_contains is not None:
+                result.append(("userLoginContains", params.user_login_contains))
+        if params.date_from is not None:
+            result.append(("from", params.date_from))
+        if params.date_to is not None:
+            result.append(("to", params.date_to))
+        if params.roi_hits:
+            for name, hit in params.roi_hits.items():
+                result.append((f"roi.{name}", str(hit).lower()))
+        result.append(("page", params.page))
+        result.append(("pageSize", params.page_size))
+
+        return result
+
+
+def _parse_summary(item: dict) -> RecordSummary:
+    return RecordSummary(
+        id=str(item["id"]),
+        test_id=str(item["testId"]),
+        user_login=item["userLogin"],
+        started_at=item["startedAt"],
+        finished_at=item["finishedAt"],
+        duration_ms=item["durationMs"],
+        created_at=item["createdAt"],
+    )
