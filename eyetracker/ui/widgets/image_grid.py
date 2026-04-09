@@ -768,6 +768,9 @@ class ImageGridWidget(QWidget):
     def set_regions(self, regions: dict[str, list[dict]]) -> None:
         self._regions = dict(regions)
 
+    def get_regions(self) -> dict[str, list[dict]]:
+        return dict(self._regions)
+
     def remove_image(self, path: str) -> None:
         """Remove an image by path."""
         if path in self._paths:

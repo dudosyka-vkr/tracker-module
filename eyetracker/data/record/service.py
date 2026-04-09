@@ -52,6 +52,8 @@ class RecordSummary:
     finished_at: str
     duration_ms: int
     created_at: str
+    roi_hits: list[dict] = field(default_factory=list)
+    # roi_hits entries: {"name": str, "hit": bool}
 
 
 @dataclass
@@ -62,6 +64,17 @@ class RecordListResult:
     page: int
     page_size: int
     total: int
+
+
+@dataclass
+class RoiStat:
+    """Aggregated hit statistics for a single ROI across all records of a test."""
+
+    name: str
+    color: str
+    hits: int
+    total: int
+    first_fixation_required: bool
 
 
 @dataclass
@@ -88,6 +101,11 @@ class RecordService(ABC):
     def save(self, record: Record) -> None: ...
 
     @abstractmethod
+    def save_unauthorized(self, record: Record, token: str, login: str) -> None:
+        """Save a record without authentication using an 8-digit test token."""
+        ...
+
+    @abstractmethod
     def query(self, params: RecordQuery) -> RecordListResult: ...
 
     @abstractmethod
@@ -96,4 +114,18 @@ class RecordService(ABC):
     @abstractmethod
     def suggest_users(self, params: RecordQuery) -> list[str]:
         """Return sorted unique user logins matching params (user fields ignored)."""
+        ...
+
+    @abstractmethod
+    def get_roi_stats(self, test_id: str) -> list[RoiStat]:
+        """Return aggregated ROI hit statistics for all records of the given test."""
+        ...
+
+    @abstractmethod
+    def is_roi_sync_needed(self, test_id: str, image_regions: dict) -> bool:
+        """Return True if any record item for the test has stale ROI metrics.
+
+        ``image_regions`` is the test's current {filename: [roi, …]} mapping.
+        Remote implementations may ignore it and query the server instead.
+        """
         ...

@@ -27,6 +27,8 @@ from eyetracker.data.settings import Settings
 from eyetracker.data.test import ApiTestDao, LocalTestDao, TestData
 from eyetracker.ui.pages.calibration import CalibrationScreen
 from eyetracker.ui.pages.home import HomeScreen
+from eyetracker.ui.pages.test_completion_screen import TestCompletionScreen
+from eyetracker.ui.pages.test_instructions_screen import TestInstructionsScreen
 from eyetracker.ui.pages.test_run_screen import TestRunScreen
 
 
@@ -73,6 +75,7 @@ class App:
         self._home = HomeScreen(
             on_start_calibration=self._go_to_calibration,
             on_start_test_run=self._go_to_test_run,
+            on_start_test_run_by_token=self._go_to_test_run_by_token,
             settings=self._settings,
             test_dao=self._test_dao,
             login_service=self._login_service,
@@ -85,14 +88,32 @@ class App:
 
         self._calibration: CalibrationScreen | None = None
         self._test_run_screen: TestRunScreen | None = None
+        self._completion_screen: TestCompletionScreen | None = None
+        self._instructions_screen: TestInstructionsScreen | None = None
+        self._completion_test_id: str | None = None
+        self._completion_via_token: bool = False
         self._pending_test = None
+        self._pending_token: str | None = None
+        self._pending_login: str | None = None
 
         self._stack.addWidget(self._home)
 
     def run(self):
         self._stack.setCurrentWidget(self._home)
         self._move_to_target_screen()
+        if self._api_client is not None and self._settings.auth_token:
+            QTimer.singleShot(0, self._check_token)
         self._qt_app.exec()
+
+    def _check_token(self) -> None:
+        """Validate the stored token against /auth/me/role on startup."""
+        try:
+            resp = self._api_client.get("/auth/me/role")
+            role = resp.get("role")
+            if role != self._settings.user_role:
+                self._settings.user_role = role
+        except Exception:
+            self._home.logout()
 
     def _move_to_target_screen(self):
         """Move the window to the monitor chosen in settings.
@@ -189,21 +210,91 @@ class App:
         self._stack.setCurrentWidget(self._test_run_screen)
         self._test_run_screen.start()
 
+    def _go_to_test_run_by_token(self, test: TestData, token: str, login: str) -> None:
+        """Navigate to test run started by access code: show instructions first."""
+        self._pending_token = token
+        self._pending_login = login
+
+        if self._instructions_screen is not None:
+            self._stack.removeWidget(self._instructions_screen)
+            self._instructions_screen.deleteLater()
+
+        self._instructions_screen = TestInstructionsScreen(
+            test_name=test.name,
+            on_start=lambda: self._start_test_after_instructions(test),
+            on_cancel=self._cancel_instructions,
+        )
+        self._stack.addWidget(self._instructions_screen)
+        self._stack.setCurrentWidget(self._instructions_screen)
+
+    def _start_test_after_instructions(self, test: TestData) -> None:
+        """Remove instructions screen and proceed to calibration."""
+        if self._instructions_screen is not None:
+            self._stack.removeWidget(self._instructions_screen)
+            self._instructions_screen.deleteLater()
+            self._instructions_screen = None
+        self._go_to_test_run(test)
+
+    def _cancel_instructions(self) -> None:
+        """Return from instructions screen back to home."""
+        if self._instructions_screen is not None:
+            self._stack.removeWidget(self._instructions_screen)
+            self._instructions_screen.deleteLater()
+            self._instructions_screen = None
+        self._pending_token = None
+        self._pending_login = None
+        self._stack.setCurrentWidget(self._home)
+
     def _on_test_run_done(self):
         """Called when all test images have been shown."""
         record = self._build_record()
         if record is not None:
-            self._record_service.save(record)
+            if self._pending_token:
+                self._record_service.save_unauthorized(
+                    record, self._pending_token, self._pending_login or ""
+                )
+            else:
+                self._record_service.save(record)
 
         self._cleanup_test_run()
+        self._completion_test_id = self._pending_test.id if self._pending_test else None
+        self._completion_via_token = bool(self._pending_token)
         self._pending_test = None
-        self._stack.setCurrentWidget(self._home)
-        self._home.setFocus()
+        self._pending_token = None
+        self._pending_login = None
 
-        if record is not None:
-            QMessageBox.information(
-                self._window, "Готово", "Результат теста сохранён.",
-            )
+        self._show_completion_screen()
+
+    def _show_completion_screen(self):
+        """Show the test completion screen."""
+        if self._completion_screen is not None:
+            self._stack.removeWidget(self._completion_screen)
+            self._completion_screen.deleteLater()
+
+        goes_to_test = not self._completion_via_token and self._completion_test_id is not None
+        btn_label = "Вернуться к тесту" if goes_to_test else "Вернуться на главный экран"
+        self._completion_screen = TestCompletionScreen(on_go_home=self._on_completion_go_home, button_label=btn_label)
+        self._stack.addWidget(self._completion_screen)
+        self._stack.setCurrentWidget(self._completion_screen)
+
+    def _on_completion_go_home(self):
+        """Navigate from completion screen back to home."""
+        if self._completion_screen is not None:
+            self._stack.removeWidget(self._completion_screen)
+            self._completion_screen.deleteLater()
+            self._completion_screen = None
+
+        self._stack.setCurrentWidget(self._home)
+
+        test_id = self._completion_test_id
+        if not self._completion_via_token and test_id is not None:
+            self._home.show_test(test_id)
+        else:
+            self._home._select_sidebar_item("overview")
+
+        self._completion_test_id = None
+        self._completion_via_token = False
+        self._home.setFocus()
 
     def _build_record(self) -> Record | None:
         if self._test_run_screen is None or self._pending_test is None:
@@ -268,7 +359,7 @@ class App:
         return Record(
             id=uuid.uuid4().hex,
             test_id=self._pending_test.id,
-            user_login="local",
+            user_login=self._pending_login or "local",
             started_at=started,
             finished_at=finished,
             duration_ms=duration_ms,

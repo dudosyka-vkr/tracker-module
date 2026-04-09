@@ -53,8 +53,28 @@ class TestDao(ABC):
         """Return absolute path to a test image by filename."""
 
     @abstractmethod
+    def add_image(self, test_id: str, src: Path) -> TestData:
+        """Upload a single image to an existing test and return updated TestData."""
+
+    @abstractmethod
+    def update_name(self, test_id: str, name: str) -> TestData:
+        """Update only the name of an existing test."""
+
+    @abstractmethod
+    def update_cover(self, test_id: str, cover_src: Path) -> TestData:
+        """Update only the cover image of an existing test."""
+
+    @abstractmethod
     def save_regions(self, test_id: str, regions: dict[str, list[dict]]) -> None:
         """Persist only the image_regions field for an existing test."""
+
+    @abstractmethod
+    def load_by_token(self, code: str) -> TestData | None:
+        """Load a test by its 8-digit access code (no auth required)."""
+
+    @abstractmethod
+    def get_token(self, test_id: str) -> str:
+        """Generate (or return existing) 8-digit access code for the test."""
 
     @abstractmethod
     def sync_roi_metrics(self, test_id: str, record_service: object) -> None:

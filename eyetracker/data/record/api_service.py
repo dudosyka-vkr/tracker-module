@@ -11,6 +11,7 @@ from eyetracker.data.record.service import (
     RecordQuery,
     RecordService,
     RecordSummary,
+    RoiStat,
 )
 
 
@@ -19,29 +20,56 @@ class ApiRecordService(RecordService):
 
     def __init__(self, client: HttpClient) -> None:
         self._client = client
+        self._test_cache: dict[str, dict] = {}  # test_id -> cached test response
 
     # -- public API -----------------------------------------------------------
 
     def save(self, record: Record) -> None:
         test_resp = self._client.get(f"/tests/{record.test_id}")
-        image_ids: list[int] = test_resp["imageIds"]
+        ids = _image_ids(test_resp)
 
         items = []
         for item in record.items:
             index = int(item.image_filename)
             items.append({
-                "imageId": image_ids[index],
+                "imageId": ids[index],
                 "metrics": {
                     "gazeGroups": item.metrics.gaze_groups,
                     "fixations": item.metrics.fixations,
                     "firstFixationTimeMs": item.metrics.first_fixation_time_ms,
                     "saccades": item.metrics.saccades,
-                    "roiMetrics": [],
+                    "roiMetrics": item.metrics.roi_metrics,
                 },
             })
 
         self._client.post("/records", json={
             "testId": int(record.test_id),
+            "startedAt": record.started_at,
+            "finishedAt": record.finished_at,
+            "durationMs": record.duration_ms,
+            "items": items,
+        })
+
+    def save_unauthorized(self, record: Record, token: str, login: str) -> None:
+        test_resp = self._client.get(f"/tests/by-token/{token}")
+        ids = _image_ids(test_resp)
+
+        items = []
+        for item in record.items:
+            index = int(item.image_filename)
+            items.append({
+                "imageId": ids[index],
+                "metrics": {
+                    "gazeGroups": item.metrics.gaze_groups,
+                    "fixations": item.metrics.fixations,
+                    "firstFixationTimeMs": item.metrics.first_fixation_time_ms,
+                    "saccades": item.metrics.saccades,
+                    "roiMetrics": item.metrics.roi_metrics,
+                },
+            })
+        self._client.post("/records/unauthorized", json={
+            "token": token,
+            "login": login,
             "startedAt": record.started_at,
             "finishedAt": record.finished_at,
             "durationMs": record.duration_ms,
@@ -68,14 +96,17 @@ class ApiRecordService(RecordService):
         except ApiError:
             return None
 
-        test_resp = self._client.get(f"/tests/{resp['testId']}")
-        image_ids: list[int] = test_resp["imageIds"]
+        test_id_key = str(resp["testId"])
+        if test_id_key not in self._test_cache:
+            self._test_cache[test_id_key] = self._client.get(f"/tests/{test_id_key}")
+        test_resp = self._test_cache[test_id_key]
+        ids = _image_ids(test_resp)
 
         items = []
         for item_data in resp["items"]:
             image_id = item_data["imageId"]
             try:
-                image_index = image_ids.index(image_id)
+                image_index = ids.index(image_id)
             except ValueError:
                 image_index = 0
             m = item_data.get("metrics", {})
@@ -101,6 +132,29 @@ class ApiRecordService(RecordService):
             items=items,
             created_at=resp["createdAt"],
         )
+
+    def get_roi_stats(self, test_id: str) -> list[RoiStat]:
+        try:
+            resp = self._client.get(f"/tests/{test_id}/roi-stats")
+        except Exception:
+            return []
+        return [
+            RoiStat(
+                name=r["name"],
+                color=r.get("color", "#0a84ff"),
+                hits=r["hits"],
+                total=r["total"],
+                first_fixation_required=r.get("firstFixationRequired", False),
+            )
+            for r in resp.get("rois", [])
+        ]
+
+    def is_roi_sync_needed(self, test_id: str, image_regions: dict) -> bool:
+        try:
+            resp = self._client.get("/records/roi-sync", params=[("testId", int(test_id))])
+            return not resp.get("synced", True)
+        except Exception:
+            return False
 
     def suggest_users(self, params: RecordQuery) -> list[str]:
         try:
@@ -137,6 +191,11 @@ class ApiRecordService(RecordService):
         return result
 
 
+def _image_ids(test_resp: dict) -> list[int]:
+    images = sorted(test_resp.get("images", []), key=lambda img: img.get("sortOrder", 0))
+    return [img["id"] for img in images]
+
+
 def _parse_summary(item: dict) -> RecordSummary:
     return RecordSummary(
         id=str(item["id"]),
@@ -146,4 +205,5 @@ def _parse_summary(item: dict) -> RecordSummary:
         finished_at=item["finishedAt"],
         duration_ms=item["durationMs"],
         created_at=item["createdAt"],
+        roi_hits=item.get("roiHits", []),
     )

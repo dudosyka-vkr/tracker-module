@@ -16,6 +16,7 @@ from eyetracker.data.record.service import (
     RecordQuery,
     RecordService,
     RecordSummary,
+    RoiStat,
 )
 
 logger = logging.getLogger(__name__)
@@ -28,6 +29,10 @@ class LocalRecordService(RecordService):
 
     def __init__(self, base_dir: Path | None = None):
         self._base_dir = base_dir or _DEFAULT_DIR
+
+    def save_unauthorized(self, record: Record, token: str, login: str) -> None:
+        record.user_login = login
+        self.save(record)
 
     def save(self, record: Record) -> None:
         os.makedirs(self._base_dir, exist_ok=True)
@@ -73,6 +78,39 @@ class LocalRecordService(RecordService):
         if not path.is_file():
             return None
         return self._read_record(path)
+
+    def get_roi_stats(self, test_id: str) -> list[RoiStat]:
+        result = self.query(RecordQuery(test_id=test_id, page_size=10_000))
+        stats: dict[str, list] = {}  # name -> [hits, total, color, first_fixation_required]
+        for summary in result.items:
+            record = self.load(summary.id)
+            if record is None:
+                continue
+            for item in record.items:
+                for roi in item.metrics.roi_metrics:
+                    name = roi.get("name", "?")
+                    if name not in stats:
+                        stats[name] = [0, 0, roi.get("color", "#0a84ff"), bool(roi.get("first_fixation_required"))]
+                    stats[name][1] += 1
+                    if roi.get("hit"):
+                        stats[name][0] += 1
+        return [
+            RoiStat(name=name, color=v[2], hits=v[0], total=v[1], first_fixation_required=v[3])
+            for name, v in stats.items()
+        ]
+
+    def is_roi_sync_needed(self, test_id: str, image_regions: dict) -> bool:
+        result = self.query(RecordQuery(test_id=test_id, page_size=10_000))
+        for summary in result.items:
+            record = self.load(summary.id)
+            if record is None:
+                continue
+            for item in record.items:
+                current_names = {r["name"] for r in image_regions.get(item.image_filename, [])}
+                record_names = {r["name"] for r in item.metrics.roi_metrics}
+                if current_names != record_names:
+                    return True
+        return False
 
     def suggest_users(self, params: RecordQuery) -> list[str]:
         neutral = RecordQuery(

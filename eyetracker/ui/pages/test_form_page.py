@@ -9,6 +9,7 @@ from pathlib import Path
 from PyQt6.QtCore import QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QFont, QIcon, QPixmap
 from PyQt6.QtWidgets import (
+    QApplication,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -78,7 +79,7 @@ class TestFormPage(QWidget):
     """Form for creating / viewing / editing a test."""
 
     back_requested = pyqtSignal()
-    test_created = pyqtSignal()
+    test_created = pyqtSignal(str)  # carries new test_id
     test_updated = pyqtSignal()
     test_deleted = pyqtSignal()
     edit_requested = pyqtSignal()
@@ -97,6 +98,10 @@ class TestFormPage(QWidget):
         self._mode = mode
         self._test_data = test_data
         self._cover_path: str | None = None
+        self._original_name: str | None = None
+        self._original_cover_path: str | None = None
+        self._image_grid: ImageGridWidget | None = None
+        self._images_error: QLabel | None = None
         self._draft_cache: DraftCache | None = None
         self._draft_type: str = "create"
         self._draft_test_id: str | None = None
@@ -119,8 +124,9 @@ class TestFormPage(QWidget):
         self._build_name_section(body_layout)
         body_layout.addSpacing(24)
         self._build_cover_section(body_layout)
-        body_layout.addSpacing(16)
-        self._build_images_section(body_layout)
+        if mode != FormMode.CREATE:
+            body_layout.addSpacing(16)
+            self._build_images_section(body_layout)
         body_layout.addStretch()
 
         scroll = QScrollArea()
@@ -205,6 +211,7 @@ class TestFormPage(QWidget):
     def _build_view_actions(self, layout: QHBoxLayout) -> None:
         actions = [
             ("Редактировать", self._on_edit_clicked),
+            ("Скопировать код", self._on_copy_code_clicked),
             ("Пройти", self._on_use_clicked),
             ("Результаты", self._on_results_clicked),
             ("Выгрузить Json", self._on_export_clicked),
@@ -375,14 +382,16 @@ class TestFormPage(QWidget):
 
     def _populate(self, test: TestData) -> None:
         self._name_edit.setText(test.name)
+        self._original_name = test.name
 
         cover_path = str(self._dao.get_cover_path(test))
         self._set_cover_display(cover_path)
+        self._original_cover_path = cover_path
 
-        image_paths = [str(self._dao.get_image_path(test, f)) for f in test.image_filenames]
-        self._image_grid.set_images(image_paths)
         if self._test_data is not None:
             self._image_grid.set_regions(self._test_data.image_regions)
+        image_paths = [str(self._dao.get_image_path(test, f)) for f in test.image_filenames]
+        self._image_grid.set_images(image_paths)
 
     def set_draft_cache(
         self,
@@ -394,7 +403,8 @@ class TestFormPage(QWidget):
         self._draft_type = draft_type
         self._draft_test_id = test_id
         self._name_edit.textChanged.connect(self._auto_save_draft)
-        self._image_grid.images_changed.connect(self._auto_save_draft)
+        if self._image_grid is not None:
+            self._image_grid.images_changed.connect(self._auto_save_draft)
 
     def _auto_save_draft(self) -> None:
         if self._draft_cache is None:
@@ -404,7 +414,7 @@ class TestFormPage(QWidget):
             test_id=self._draft_test_id,
             name=self._name_edit.text(),
             cover_path=self._cover_path,
-            image_paths=self._image_grid.get_image_paths(),
+            image_paths=self._image_grid.get_image_paths() if self._image_grid is not None else [],
         )
         self._draft_cache.save(draft)
 
@@ -415,7 +425,7 @@ class TestFormPage(QWidget):
         self._name_edit.setText(draft.name)
         if draft.cover_path:
             self._set_cover_display(draft.cover_path)
-        if draft.image_paths:
+        if draft.image_paths and self._image_grid is not None:
             self._image_grid.set_images(draft.image_paths)
 
     def _on_cancel_draft(self) -> None:
@@ -441,7 +451,8 @@ class TestFormPage(QWidget):
                     border-color: {TEXT_SECONDARY};
                 }}
             """)
-            self._image_grid.clear()
+            if self._image_grid is not None:
+                self._image_grid.clear()
 
     def _on_save_as_draft(self) -> None:
         self._auto_save_draft()
@@ -479,65 +490,93 @@ class TestFormPage(QWidget):
         self._auto_save_draft()
 
     def _on_add_image(self) -> None:
+        if self._image_grid is None:
+            return
         path = pick_image(self)
         if path is None:
             return
+
+        if self._mode == FormMode.EDIT and self._test_data is not None:
+            try:
+                self._test_data = self._dao.add_image(self._test_data.id, Path(path))
+            except Exception as exc:
+                logger.error("Failed to upload image: %s", exc)
+                QMessageBox.warning(self, "Ошибка", f"Не удалось загрузить изображение: {exc}")
+                return
+            new_filename = self._test_data.image_filenames[-1]
+            path = str(self._dao.get_image_path(self._test_data, new_filename))
+
         if not self._image_grid.add_image(path):
             QMessageBox.warning(self, "Ошибка", "Не удалось загрузить изображение")
             return
-        self._images_error.setVisible(False)
+        if self._images_error is not None:
+            self._images_error.setVisible(False)
 
     def _on_create_clicked(self) -> None:
-        errors = validate_form(
-            self._name_edit.text(),
-            self._cover_path,
-            self._image_grid.get_image_paths(),
-        )
+        errors: dict[str, str] = {}
+        if not self._name_edit.text().strip():
+            errors["name"] = "Название не может быть пустым"
+        if self._cover_path is None:
+            errors["cover"] = "Выберите обложку"
         self._show_errors(errors)
         if errors:
             return
 
         try:
-            self._dao.create(
+            test = self._dao.create(
                 name=self._name_edit.text().strip(),
                 cover_src=Path(self._cover_path),  # type: ignore[arg-type]
-                image_srcs=[Path(p) for p in self._image_grid.get_image_paths()],
+                image_srcs=[],
             )
             if self._draft_cache:
                 self._draft_cache.clear()
-            QMessageBox.information(self, "Успех", "Тест успешно создан")
-            self.test_created.emit()
+            self.test_created.emit(test.id)
         except OSError as exc:
             logger.error("Failed to create test: %s", exc)
             QMessageBox.warning(self, "Ошибка", f"Не удалось сохранить тест: {exc}")
 
     def _on_save_clicked(self) -> None:
-        errors = validate_form(
-            self._name_edit.text(),
-            self._cover_path,
-            self._image_grid.get_image_paths(),
-        )
+        errors: dict[str, str] = {}
+        if not self._name_edit.text().strip():
+            errors["name"] = "Название не может быть пустым"
+        if self._cover_path is None:
+            errors["cover"] = "Выберите обложку"
         self._show_errors(errors)
         if errors:
             return
-
+        if self._test_data is None:
+            return
+        new_name = self._name_edit.text().strip()
         try:
-            self._dao.update(
-                test_id=self._test_data.id,  # type: ignore[union-attr]
-                name=self._name_edit.text().strip(),
-                cover_src=Path(self._cover_path),  # type: ignore[arg-type]
-                image_srcs=[Path(p) for p in self._image_grid.get_image_paths()],
-            )
-            if self._draft_cache:
-                self._draft_cache.clear()
-            QMessageBox.information(self, "Успех", "Тест успешно сохранён")
-            self.test_updated.emit()
-        except OSError as exc:
+            if new_name != self._original_name:
+                self._test_data = self._dao.update_name(self._test_data.id, new_name)
+                self._original_name = new_name
+            if self._cover_path != self._original_cover_path:
+                self._test_data = self._dao.update_cover(
+                    self._test_data.id, Path(self._cover_path)  # type: ignore[arg-type]
+                )
+                self._original_cover_path = self._cover_path
+        except Exception as exc:
             logger.error("Failed to update test: %s", exc)
             QMessageBox.warning(self, "Ошибка", f"Не удалось сохранить тест: {exc}")
+            return
+        if self._draft_cache:
+            self._draft_cache.clear()
+        self.test_updated.emit()
 
     def _on_edit_clicked(self) -> None:
         self.edit_requested.emit()
+
+    def _on_copy_code_clicked(self) -> None:
+        if self._test_data is None:
+            return
+        try:
+            code = self._dao.get_token(self._test_data.id)
+        except Exception as exc:
+            QMessageBox.warning(self, "Ошибка", f"Не удалось получить код: {exc}")
+            return
+        QApplication.clipboard().setText(code)
+        QMessageBox.information(self, "Код скопирован", f"Код теста {code} скопирован в буфер обмена")
 
     def _on_use_clicked(self) -> None:
         self.run_test_requested.emit()
@@ -596,8 +635,9 @@ class TestFormPage(QWidget):
         self._cover_error.setText(errors.get("cover", ""))
         self._cover_error.setVisible("cover" in errors)
 
-        self._images_error.setText(errors.get("images", ""))
-        self._images_error.setVisible("images" in errors)
+        if self._images_error is not None:
+            self._images_error.setText(errors.get("images", ""))
+            self._images_error.setVisible("images" in errors)
 
     # -- helpers -------------------------------------------------------------
 

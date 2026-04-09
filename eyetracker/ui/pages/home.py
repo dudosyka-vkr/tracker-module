@@ -61,12 +61,15 @@ from eyetracker.ui.theme import (
 
 _SIDEBAR_ITEMS = [
     {"id": "overview", "title": "Обзор", "icon": "⌂"},
+    {"id": "take_test", "title": "Пройти тест по коду", "icon": "▶"},
     {"id": "calibration", "title": "Демо-трекер", "icon": "◎"},
     {"id": "tests", "title": "Тесты", "icon": "☰"},
     {"id": "create_test", "title": "Создать тест", "icon": "+"},
     {"id": "settings", "title": "Настройки", "icon": "⚙"},
     {"id": "help", "title": "Помощь", "icon": "?"},
 ]
+
+_PUBLIC_ITEMS = {"overview", "take_test", "calibration"}
 
 
 class HomeScreen(QWidget):
@@ -82,10 +85,12 @@ class HomeScreen(QWidget):
         draft_cache: DraftCache,
         record_service: RecordService,
         on_monitor_changed: Callable[[], None] | None = None,
+        on_start_test_run_by_token: Callable[[TestData, str, str], None] | None = None,
     ):
         super().__init__()
         self._on_start = on_start_calibration
         self._on_start_test_run = on_start_test_run
+        self._on_start_test_run_by_token = on_start_test_run_by_token
         self._settings = settings
         self._on_monitor_changed_cb = on_monitor_changed
         self._test_dao = test_dao
@@ -160,7 +165,7 @@ class HomeScreen(QWidget):
     def _update_auth_state(self, logged_in: bool) -> None:
         self._logged_in = logged_in
         for item_id, btn in self._sidebar_buttons.items():
-            btn.setVisible(item_id == "overview" or logged_in)
+            btn.setVisible(item_id in _PUBLIC_ITEMS or logged_in)
         if hasattr(self, "_admin_section"):
             self._admin_section.setVisible(self._is_super_admin())
         if logged_in:
@@ -244,6 +249,8 @@ class HomeScreen(QWidget):
     def _build_page(self, item_id: str, title: str) -> QWidget:
         if item_id == "overview":
             return self._build_overview_page()
+        if item_id == "take_test":
+            return self._build_take_test_page()
         if item_id == "calibration":
             return self._build_calibration_page()
         if item_id == "tests":
@@ -280,57 +287,84 @@ class HomeScreen(QWidget):
         page = QWidget()
         page.setStyleSheet(f"background-color: {BG_MAIN};")
 
-        vbox = QVBoxLayout(page)
-        vbox.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(40, 40, 40, 40)
+        outer.setSpacing(0)
+        outer.addStretch()
+
+        center = QVBoxLayout()
+        center.setSpacing(0)
+        center.setAlignment(Qt.AlignmentFlag.AlignHCenter)
 
         title = QLabel("EyeTracker")
         title.setFont(QFont(FONT_FAMILY, 36, QFont.Weight.Bold))
         title.setStyleSheet(f"color: {TEXT_PRIMARY}; background: transparent;")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        center.addWidget(title)
 
-        desc = QLabel("Система отслеживания взгляда\nчерез веб-камеру")
-        desc.setFont(QFont(FONT_FAMILY, 16))
-        desc.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent;")
+        desc = QLabel("Для входа введи логин и пароль")
+        desc.setFont(QFont(FONT_FAMILY, 14))
+        desc.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent; margin-top: 8px;")
         desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        center.addWidget(desc)
 
-        input_style = f"""
+        center.addSpacing(40)
+
+        _field_style = f"""
             QLineEdit {{
                 background-color: {BG_SIDEBAR};
                 color: {TEXT_PRIMARY};
                 border: 1px solid {BORDER_COLOR};
                 border-radius: {CORNER_RADIUS}px;
-                padding: 10px 14px;
-                font-size: 14px;
+                padding: 0 16px;
             }}
-            QLineEdit:focus {{
-                border: 1px solid {BUTTON_BG};
-            }}
+            QLineEdit:focus {{ border-color: {BUTTON_BG}; }}
         """
 
+        card = QWidget()
+        card.setStyleSheet(f"background-color: {CARD_BG}; border-radius: {CORNER_RADIUS}px;")
+        card.setFixedWidth(400)
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(32, 32, 32, 32)
+        card_layout.setSpacing(16)
+
+        login_label = QLabel("Логин")
+        login_label.setFont(QFont(FONT_FAMILY, 13))
+        login_label.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent;")
+        card_layout.addWidget(login_label)
+
         self._login_input = QLineEdit()
-        self._login_input.setPlaceholderText("Логин")
-        self._login_input.setFixedWidth(320)
-        self._login_input.setFont(QFont(FONT_FAMILY, 14))
-        self._login_input.setStyleSheet(input_style)
+        self._login_input.setPlaceholderText("Введите логин…")
+        self._login_input.setFont(QFont(FONT_FAMILY, 15))
+        self._login_input.setFixedHeight(48)
+        self._login_input.setStyleSheet(_field_style)
+        self._login_input.returnPressed.connect(self._on_submit_click)
+        card_layout.addWidget(self._login_input)
+
+        password_label = QLabel("Пароль")
+        password_label.setFont(QFont(FONT_FAMILY, 13))
+        password_label.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent;")
+        card_layout.addWidget(password_label)
 
         self._password_input = QLineEdit()
-        self._password_input.setPlaceholderText("Пароль")
+        self._password_input.setPlaceholderText("Введите пароль…")
         self._password_input.setEchoMode(QLineEdit.EchoMode.Password)
-        self._password_input.setFixedWidth(320)
-        self._password_input.setFont(QFont(FONT_FAMILY, 14))
-        self._password_input.setStyleSheet(input_style)
+        self._password_input.setFont(QFont(FONT_FAMILY, 15))
+        self._password_input.setFixedHeight(48)
+        self._password_input.setStyleSheet(_field_style)
         self._password_input.returnPressed.connect(self._on_submit_click)
+        card_layout.addWidget(self._password_input)
 
         self._login_error = QLabel("")
         self._login_error.setFont(QFont(FONT_FAMILY, 12))
         self._login_error.setStyleSheet(f"color: {ERROR_COLOR}; background: transparent;")
-        self._login_error.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._login_error.setFixedWidth(320)
+        self._login_error.setWordWrap(True)
         self._login_error.hide()
+        card_layout.addWidget(self._login_error)
 
         self._login_btn = QPushButton("Войти")
-        self._login_btn.setFixedSize(320, 44)
-        self._login_btn.setFont(QFont(FONT_FAMILY, 15, QFont.Weight.Bold))
+        self._login_btn.setFixedHeight(48)
+        self._login_btn.setFont(QFont(FONT_FAMILY, 14, QFont.Weight.Bold))
         self._login_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._login_btn.clicked.connect(self._on_submit_click)
         self._login_btn.setStyleSheet(f"""
@@ -340,17 +374,15 @@ class HomeScreen(QWidget):
                 border: none;
                 border-radius: {CORNER_RADIUS}px;
             }}
-            QPushButton:hover {{
-                background-color: {BUTTON_HOVER};
-            }}
+            QPushButton:hover {{ background-color: {BUTTON_HOVER}; }}
             QPushButton:disabled {{
                 background-color: {BG_SIDEBAR_HOVER};
                 color: {TEXT_SECONDARY};
             }}
         """)
+        card_layout.addWidget(self._login_btn)
 
         self._toggle_form_btn = QPushButton("Нет аккаунта? Зарегистрироваться")
-        self._toggle_form_btn.setFixedWidth(320)
         self._toggle_form_btn.setFont(QFont(FONT_FAMILY, 13))
         self._toggle_form_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._toggle_form_btn.setFlat(True)
@@ -358,20 +390,11 @@ class HomeScreen(QWidget):
             f"color: {BUTTON_BG}; background: transparent; border: none;"
         )
         self._toggle_form_btn.clicked.connect(self._on_toggle_form_mode)
+        card_layout.addWidget(self._toggle_form_btn, alignment=Qt.AlignmentFlag.AlignHCenter)
 
-        vbox.addWidget(title)
-        vbox.addSpacing(10)
-        vbox.addWidget(desc)
-        vbox.addSpacing(30)
-        vbox.addWidget(self._login_input, alignment=Qt.AlignmentFlag.AlignCenter)
-        vbox.addSpacing(10)
-        vbox.addWidget(self._password_input, alignment=Qt.AlignmentFlag.AlignCenter)
-        vbox.addSpacing(6)
-        vbox.addWidget(self._login_error, alignment=Qt.AlignmentFlag.AlignCenter)
-        vbox.addSpacing(10)
-        vbox.addWidget(self._login_btn, alignment=Qt.AlignmentFlag.AlignCenter)
-        vbox.addSpacing(8)
-        vbox.addWidget(self._toggle_form_btn, alignment=Qt.AlignmentFlag.AlignCenter)
+        center.addWidget(card, alignment=Qt.AlignmentFlag.AlignHCenter)
+        outer.addLayout(center)
+        outer.addStretch()
 
         return page
 
@@ -658,8 +681,158 @@ class HomeScreen(QWidget):
         self._settings.user_role = None
         self._update_auth_state(False)
 
+    def show_test(self, test_id: str) -> None:
+        """Navigate to the Tests tab and open the given test's detail page."""
+        self._select_sidebar_item("tests")
+        self._show_test_detail(test_id)
+
     def _on_logout(self) -> None:
         self.logout()
+
+    # ---- Take test by code page ----------------------------------------------
+
+    def _build_take_test_page(self) -> QWidget:
+        page = QWidget()
+        page.setStyleSheet(f"background-color: {BG_MAIN};")
+
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(40, 40, 40, 40)
+        outer.setSpacing(0)
+        outer.addStretch()
+
+        center = QVBoxLayout()
+        center.setSpacing(0)
+        center.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+
+        title = QLabel("Пройти тест по коду")
+        title.setFont(QFont(FONT_FAMILY, 28, QFont.Weight.Bold))
+        title.setStyleSheet(f"color: {TEXT_PRIMARY}; background: transparent;")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        center.addWidget(title)
+
+        subtitle = QLabel("Введите логин и код теста, чтобы начать прохождение")
+        subtitle.setFont(QFont(FONT_FAMILY, 14))
+        subtitle.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent; margin-top: 8px;")
+        subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        center.addWidget(subtitle)
+
+        center.addSpacing(40)
+
+        card = QWidget()
+        card.setStyleSheet(
+            f"background-color: {CARD_BG}; border-radius: {CORNER_RADIUS}px;"
+        )
+        card.setFixedWidth(400)
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(32, 32, 32, 32)
+        card_layout.setSpacing(16)
+
+        _field_style = f"""
+            QLineEdit {{
+                background-color: {BG_SIDEBAR};
+                color: {TEXT_PRIMARY};
+                border: 1px solid {BORDER_COLOR};
+                border-radius: {CORNER_RADIUS}px;
+                padding: 0 16px;
+            }}
+            QLineEdit:focus {{ border-color: {BUTTON_BG}; }}
+        """
+
+        login_label = QLabel("Логин")
+        login_label.setFont(QFont(FONT_FAMILY, 13))
+        login_label.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent;")
+        card_layout.addWidget(login_label)
+
+        self._test_login_edit = QLineEdit()
+        self._test_login_edit.setPlaceholderText("Введите логин…")
+        self._test_login_edit.setFont(QFont(FONT_FAMILY, 15))
+        self._test_login_edit.setFixedHeight(48)
+        self._test_login_edit.setStyleSheet(_field_style)
+        card_layout.addWidget(self._test_login_edit)
+
+        self._test_login_error = QLabel("")
+        self._test_login_error.setFont(QFont(FONT_FAMILY, 12))
+        self._test_login_error.setStyleSheet(f"color: {ERROR_COLOR}; background: transparent;")
+        self._test_login_error.hide()
+        card_layout.addWidget(self._test_login_error)
+
+        card_layout.addSpacing(4)
+
+        code_label = QLabel("Код теста")
+        code_label.setFont(QFont(FONT_FAMILY, 13))
+        code_label.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent;")
+        card_layout.addWidget(code_label)
+
+        self._test_code_edit = QLineEdit()
+        self._test_code_edit.setPlaceholderText("Введите код…")
+        self._test_code_edit.setFont(QFont(FONT_FAMILY, 15))
+        self._test_code_edit.setFixedHeight(48)
+        self._test_code_edit.setStyleSheet(_field_style)
+        card_layout.addWidget(self._test_code_edit)
+
+        self._test_code_error = QLabel("")
+        self._test_code_error.setFont(QFont(FONT_FAMILY, 12))
+        self._test_code_error.setStyleSheet(f"color: {ERROR_COLOR}; background: transparent;")
+        self._test_code_error.hide()
+        card_layout.addWidget(self._test_code_error)
+
+        start_btn = QPushButton("Начать тест")
+        start_btn.setFont(QFont(FONT_FAMILY, 14, QFont.Weight.Bold))
+        start_btn.setFixedHeight(48)
+        start_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        start_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {BUTTON_BG};
+                color: white;
+                border: none;
+                border-radius: {CORNER_RADIUS}px;
+            }}
+            QPushButton:hover {{ background-color: {BUTTON_HOVER}; }}
+        """)
+        start_btn.clicked.connect(self._on_take_test_clicked)
+        self._test_login_edit.returnPressed.connect(self._on_take_test_clicked)
+        self._test_code_edit.returnPressed.connect(self._on_take_test_clicked)
+        card_layout.addWidget(start_btn)
+
+        center.addWidget(card, alignment=Qt.AlignmentFlag.AlignHCenter)
+        outer.addLayout(center)
+        outer.addStretch()
+        return page
+
+    def _on_take_test_clicked(self) -> None:
+        login = self._test_login_edit.text().strip()
+        code = self._test_code_edit.text().strip()
+        has_error = False
+        if not login:
+            self._test_login_error.setText("Введите логин")
+            self._test_login_error.show()
+            has_error = True
+        else:
+            self._test_login_error.hide()
+        if not code:
+            self._test_code_error.setText("Введите код теста")
+            self._test_code_error.show()
+            has_error = True
+        else:
+            self._test_code_error.hide()
+        if has_error:
+            return
+
+        try:
+            test = self._test_dao.load_by_token(code)
+        except Exception as exc:
+            self._test_code_error.setText(f"Ошибка: {exc}")
+            self._test_code_error.show()
+            return
+
+        if test is None:
+            self._test_code_error.setText("Тест с таким кодом не найден")
+            self._test_code_error.show()
+            return
+
+        self._test_code_error.hide()
+        if self._on_start_test_run_by_token is not None:
+            self._on_start_test_run_by_token(test, code, login)
 
     # ---- Other content pages -------------------------------------------------
 
@@ -670,15 +843,15 @@ class HomeScreen(QWidget):
         vbox = QVBoxLayout(page)
         vbox.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        title = QLabel("Калибровка")
+        title = QLabel("Демо-трекер")
         title.setFont(QFont(FONT_FAMILY, 36, QFont.Weight.Bold))
         title.setStyleSheet(f"color: {TEXT_PRIMARY}; background: transparent;")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         desc = QLabel(
-            "Калибровка состоит из 9 точек на экране.\n"
-            "Кликните по каждой точке 5 раз, глядя на неё.\n"
-            "После калибровки будет измерена точность."
+            "Здесь вы можете попробовать, как работает отслеживание взгляда.\n"
+            "Пройдите калибровку — кликните по каждой из 9 точек 5 раз, глядя на неё.\n"
+            "После этого на экране появится маркер, показывающий куда направлен ваш взгляд в реальном времени."
         )
         desc.setFont(QFont(FONT_FAMILY, 16))
         desc.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent;")
@@ -798,12 +971,6 @@ class HomeScreen(QWidget):
         vbox.addWidget(section_label)
         vbox.addSpacing(8)
         vbox.addWidget(self._monitor_combo)
-        vbox.addSpacing(24)
-        vbox.addWidget(self._skip_calibration_cb)
-        vbox.addWidget(skip_desc)
-        vbox.addSpacing(16)
-        vbox.addWidget(self._show_gaze_marker_cb)
-        vbox.addWidget(marker_desc)
 
         _spin_style = f"""
             QSpinBox {{
@@ -852,11 +1019,6 @@ class HomeScreen(QWidget):
         rate_desc.setFont(QFont(FONT_FAMILY, 12))
         rate_desc.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent;")
 
-        vbox.addSpacing(16)
-        vbox.addWidget(duration_label)
-        vbox.addSpacing(8)
-        vbox.addWidget(self._duration_spin)
-        vbox.addWidget(duration_desc)
         self._fixation_enabled_cb = QCheckBox("Детекция фиксаций")
         self._fixation_enabled_cb.setFont(QFont(FONT_FAMILY, 14))
         self._fixation_enabled_cb.setStyleSheet(_checkbox_style)
@@ -910,6 +1072,17 @@ class HomeScreen(QWidget):
         admin_vbox.setSpacing(0)
 
         admin_vbox.addSpacing(16)
+        admin_vbox.addWidget(self._skip_calibration_cb)
+        admin_vbox.addWidget(skip_desc)
+        admin_vbox.addSpacing(16)
+        admin_vbox.addWidget(self._show_gaze_marker_cb)
+        admin_vbox.addWidget(marker_desc)
+        admin_vbox.addSpacing(16)
+        admin_vbox.addWidget(duration_label)
+        admin_vbox.addSpacing(8)
+        admin_vbox.addWidget(self._duration_spin)
+        admin_vbox.addWidget(duration_desc)
+        admin_vbox.addSpacing(16)
         admin_vbox.addWidget(rate_label)
         admin_vbox.addSpacing(8)
         admin_vbox.addWidget(self._timestep_spin)
@@ -928,6 +1101,16 @@ class HomeScreen(QWidget):
         admin_vbox.addWidget(self._fixation_window_spin)
         admin_vbox.addWidget(window_desc)
 
+        self._use_api_cb = QCheckBox("Использовать удалённый сервер (API)")
+        self._use_api_cb.setFont(QFont(FONT_FAMILY, 14))
+        self._use_api_cb.setStyleSheet(_checkbox_style)
+        self._use_api_cb.setChecked(self._settings.server_url is not None)
+
+        use_api_desc = QLabel("При отключении приложение работает полностью локально. Изменение вступает в силу после перезапуска.")
+        use_api_desc.setFont(QFont(FONT_FAMILY, 12))
+        use_api_desc.setWordWrap(True)
+        use_api_desc.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent; padding-left: 26px;")
+
         server_url_label = QLabel("URL сервера")
         server_url_label.setFont(QFont(FONT_FAMILY, 14))
         server_url_label.setStyleSheet(f"color: {TEXT_PRIMARY}; background: transparent;")
@@ -937,6 +1120,7 @@ class HomeScreen(QWidget):
         self._server_url_edit.setFont(QFont(FONT_FAMILY, 14))
         self._server_url_edit.setPlaceholderText("http://localhost:8080")
         self._server_url_edit.setText(self._settings.server_url or "")
+        self._server_url_edit.setEnabled(self._settings.server_url is not None)
         self._server_url_edit.setStyleSheet(f"""
             QLineEdit {{
                 background-color: {BG_SIDEBAR};
@@ -945,13 +1129,22 @@ class HomeScreen(QWidget):
                 border-radius: {CORNER_RADIUS}px;
                 padding: 8px 12px;
             }}
+            QLineEdit:disabled {{
+                color: {TEXT_SECONDARY};
+                border-color: {BORDER_COLOR};
+            }}
         """)
         self._server_url_edit.editingFinished.connect(self._on_server_url_changed)
 
-        server_url_desc = QLabel("Адрес бэкенда. Оставьте пустым для локального режима.")
+        server_url_desc = QLabel("Адрес бэкенда.")
         server_url_desc.setFont(QFont(FONT_FAMILY, 12))
         server_url_desc.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent;")
 
+        self._use_api_cb.toggled.connect(self._on_use_api_toggled)
+
+        admin_vbox.addSpacing(16)
+        admin_vbox.addWidget(self._use_api_cb)
+        admin_vbox.addWidget(use_api_desc)
         admin_vbox.addSpacing(16)
         admin_vbox.addWidget(server_url_label)
         admin_vbox.addSpacing(8)
@@ -1010,6 +1203,17 @@ class HomeScreen(QWidget):
     def _on_fixation_window_changed(self, samples: int) -> None:
         self._settings.fixation_window_size_samples = samples
 
+    def _on_use_api_toggled(self, checked: bool) -> None:
+        self._server_url_edit.setEnabled(checked)
+        if checked:
+            url = self._server_url_edit.text().strip()
+            from eyetracker.data.settings import _DEFAULT_SERVER_URL
+            self._settings.server_url = url if url else _DEFAULT_SERVER_URL
+            if not self._server_url_edit.text().strip():
+                self._server_url_edit.setText(self._settings.server_url or "")
+        else:
+            self._settings.server_url = None
+
     def _on_server_url_changed(self) -> None:
         url = self._server_url_edit.text().strip()
         self._settings.server_url = url if url else None
@@ -1053,6 +1257,14 @@ class HomeScreen(QWidget):
             "первой точке, задайте название и цвет, нажмите «Сохранить». "
             "Зон интереса на одном изображении может быть несколько. "
             "В результатах теста для каждого прохождения отображается, была ли зона достигнута (✓).",
+        ),
+        (
+            "Как поделиться тестом, чтобы его мог пройти другой человек?",
+            "Откройте нужный тест из библиотеки и нажмите кнопку «Скопировать код». "
+            "Код теста будет скопирован в буфер обмена — передайте его участнику любым удобным способом. "
+            "Участник запускает приложение, выбирает «Пройти тест по коду» на главном экране, "
+            "вводит полученный код и своё имя, после чего проходит тест. "
+            "Результаты появятся на странице теста в разделе «Результаты».",
         ),
         (
             "Как работает режим «Только первая фиксация»?",
@@ -1389,7 +1601,7 @@ class HomeScreen(QWidget):
         self._detail_page = TestFormPage(dao=self._test_dao, mode=FormMode.CREATE)
         self._detail_page.set_draft_cache(self._draft_cache, "create")
         self._detail_page.back_requested.connect(self._show_create_test_choice)
-        self._detail_page.test_created.connect(self._on_test_created)
+        self._detail_page.test_created.connect(self._on_test_created)  # type: ignore[arg-type]
         self._content_stack.addWidget(self._detail_page)
         self._content_stack.setCurrentWidget(self._detail_page)
 
@@ -1405,8 +1617,10 @@ class HomeScreen(QWidget):
         if page:
             self._content_stack.setCurrentWidget(page)
 
-    def _on_test_created(self) -> None:
-        self._show_create_test_choice()
+    def _on_test_created(self, test_id: str) -> None:
+        self._remove_detail_page()
+        self._select_sidebar_item("tests")
+        self._show_test_detail(test_id, FormMode.EDIT)
 
     def _on_import_test_chosen(self) -> None:
         path, _ = QFileDialog.getOpenFileName(

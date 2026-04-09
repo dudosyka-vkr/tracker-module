@@ -32,8 +32,9 @@ class HttpClient:
     server returns 401 (expired / missing token), before the ApiError is raised.
     """
 
-    def __init__(self, base_url: str, token: str | None = None) -> None:
+    def __init__(self, base_url: str, token: str | None = None, timeout: int = 30) -> None:
         self._base_url = base_url.rstrip("/")
+        self._timeout = timeout
         self._session = requests.Session()
         self.on_unauthorized: Callable[[], None] | None = None
         self.set_token(token)
@@ -48,12 +49,12 @@ class HttpClient:
 
     def get(self, path: str, params: list[tuple] | dict | None = None) -> dict:
         logger.info("GET %s params=%s", self._url(path), params)
-        resp = self._session.get(self._url(path), params=params)
+        resp = self._session.get(self._url(path), params=params, timeout=self._timeout)
         return self._parse(resp)
 
     def get_bytes(self, path: str) -> bytes:
         logger.info("GET %s", self._url(path))
-        resp = self._session.get(self._url(path))
+        resp = self._session.get(self._url(path), timeout=self._timeout)
         self._check(resp)
         logger.info("  -> %s (%d bytes)", resp.status_code, len(resp.content))
         return resp.content
@@ -66,7 +67,7 @@ class HttpClient:
         data: dict | None = None,
     ) -> dict:
         logger.info("POST %s body=%s data=%s files=%s", self._url(path), json, data, _file_names(files))
-        resp = self._session.post(self._url(path), json=json, files=files, data=data)
+        resp = self._session.post(self._url(path), json=json, files=files, data=data, timeout=self._timeout)
         return self._parse(resp)
 
     def put(
@@ -77,17 +78,23 @@ class HttpClient:
         data: dict | None = None,
     ) -> dict:
         logger.info("PUT %s body=%s data=%s files=%s", self._url(path), json, data, _file_names(files))
-        resp = self._session.put(self._url(path), json=json, files=files, data=data)
+        resp = self._session.put(self._url(path), json=json, files=files, data=data, timeout=self._timeout)
         return self._parse(resp)
 
-    def patch(self, path: str, json: dict | None = None) -> dict:
-        logger.info("PATCH %s body=%s", self._url(path), json)
-        resp = self._session.patch(self._url(path), json=json)
+    def patch(
+        self,
+        path: str,
+        json: dict | None = None,
+        files=None,
+        data: dict | None = None,
+    ) -> dict:
+        logger.info("PATCH %s body=%s data=%s files=%s", self._url(path), json, data, _file_names(files))
+        resp = self._session.patch(self._url(path), json=json, files=files, data=data, timeout=self._timeout)
         return self._parse(resp)
 
     def delete(self, path: str) -> None:
         logger.info("DELETE %s", self._url(path))
-        resp = self._session.delete(self._url(path))
+        resp = self._session.delete(self._url(path), timeout=self._timeout)
         self._check(resp)
 
     # -- private helpers ------------------------------------------------------
@@ -108,6 +115,9 @@ class HttpClient:
 
     def _parse(self, resp: requests.Response) -> dict:
         self._check(resp)
+        if not resp.content:
+            logger.info("  -> %s (empty body)", resp.status_code)
+            return {}
         body = resp.json()
         logger.info("  -> %s %s", resp.status_code, body)
         return body

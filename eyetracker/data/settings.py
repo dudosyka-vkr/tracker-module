@@ -84,7 +84,7 @@ class Settings:
     @property
     def fixation_radius_threshold_k(self) -> float:
         """Fixation radius threshold in screen pixels."""
-        return float(self._data.get("fixation_radius_threshold_k", 80.0))
+        return float(self._data.get("fixation_radius_threshold_k", 160.0))
 
     @fixation_radius_threshold_k.setter
     def fixation_radius_threshold_k(self, value: float) -> None:
@@ -94,7 +94,7 @@ class Settings:
     @property
     def fixation_window_size_samples(self) -> int:
         """Number of recent gaze points kept in the fixation detection window."""
-        return int(self._data.get("fixation_window_size_samples", 10))
+        return int(self._data.get("fixation_window_size_samples", 5))
 
     @fixation_window_size_samples.setter
     def fixation_window_size_samples(self, value: int) -> None:
@@ -104,7 +104,7 @@ class Settings:
     @property
     def image_display_duration_ms(self) -> int:
         """How long each test image is shown, in milliseconds."""
-        return int(self._data.get("image_display_duration_ms", 5000))
+        return int(self._data.get("image_display_duration_ms", 15000))
 
     @image_display_duration_ms.setter
     def image_display_duration_ms(self, value: int) -> None:

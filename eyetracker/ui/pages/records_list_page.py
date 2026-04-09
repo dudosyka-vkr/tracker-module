@@ -17,7 +17,12 @@ _RESOURCES_DIR = (
 )
 from typing import Callable
 
-from PyQt6.QtCore import QDateTime, Qt, QThread, QRect, pyqtSignal
+import logging
+import threading
+
+logger = logging.getLogger(__name__)
+
+from PyQt6.QtCore import QDateTime, Qt, QRect, QTimer
 from PyQt6.QtGui import QBrush, QColor, QFont, QPainter, QPen
 from PyQt6.QtWidgets import (
     QComboBox,
@@ -129,54 +134,8 @@ class _PieChartWidget(QWidget):
             painter.drawText(0, note_y, w, 16, Qt.AlignmentFlag.AlignCenter, "★ только первая фиксация")
 
 
-class _SyncWorker(QThread):
-    finished = pyqtSignal()
-
-    def __init__(self, test_dao: TestDao, test_id: str, record_service: RecordService):
-        super().__init__()
-        self._test_dao = test_dao
-        self._test_id = test_id
-        self._record_service = record_service
-
-    def run(self) -> None:
-        self._test_dao.sync_roi_metrics(self._test_id, self._record_service)
-        self.finished.emit()
 
 
-def _roi_sync_needed(test: TestData, record_service: RecordService) -> bool:
-    """Return True if any record for this test has ROI metrics that don't match
-    the test's current image_regions (added or removed ROIs)."""
-    result = record_service.query(RecordQuery(test_id=test.id, page_size=10_000))
-    for summary in result.items:
-        record = record_service.load(summary.id)
-        if record is None:
-            continue
-        for item in record.items:
-            current_rois = test.image_regions.get(item.image_filename, [])
-            current_names = {r["name"] for r in current_rois}
-            record_names = {r["name"] for r in item.metrics.roi_metrics}
-            if current_names != record_names:
-                return True
-    return False
-
-
-def _gather_roi_stats(test_id: str, record_service: RecordService) -> dict[str, tuple[int, int, bool]]:
-    """Return {roi_name: (hits, total, first_fixation_required)} across all records for this test."""
-    result = record_service.query(RecordQuery(test_id=test_id, page_size=10_000))
-    stats: dict[str, list] = {}  # name -> [hits, total, first_fixation_required]
-    for summary in result.items:
-        record = record_service.load(summary.id)
-        if record is None:
-            continue
-        for item in record.items:
-            for roi in item.metrics.roi_metrics:
-                name = roi.get("name", "?")
-                if name not in stats:
-                    stats[name] = [0, 0, bool(roi.get("first_fixation_required"))]
-                stats[name][1] += 1
-                if roi.get("hit"):
-                    stats[name][0] += 1
-    return {name: (v[0], v[1], v[2]) for name, v in stats.items()}
 
 
 class RecordsListPage(QWidget):
@@ -200,10 +159,8 @@ class RecordsListPage(QWidget):
         self._on_back = on_back
         self._test_dao = test_dao
         self._test = test
-        self._sync_worker: _SyncWorker | None = None
         self._all_summaries: list[RecordSummary] = []
         self._filtered_summaries: list[RecordSummary] = []
-        self._all_records: dict[str, Record] = {}
         self._roi_names: list[str] = []
         self._roi_filter_combos: dict[str, QComboBox] = {}
 
@@ -305,7 +262,7 @@ class RecordsListPage(QWidget):
         self._empty_label.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent;")
         self._empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._empty_label.hide()
-        self._body_layout.addWidget(self._empty_label, stretch=1)
+        self._body_layout.addWidget(self._empty_label)
 
         # ── statistics section (hidden until records load) ────────────────────
         self._stats_section = QWidget()
@@ -616,7 +573,7 @@ class RecordsListPage(QWidget):
         self._table.verticalHeader().setVisible(False)
         self._table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self._table.horizontalHeader().setStretchLastSection(False)
+        self._table.horizontalHeader().setStretchLastSection(True)
         self._table.setStyleSheet(f"""
             QTableWidget {{
                 background-color: {BG_SIDEBAR};
@@ -640,6 +597,7 @@ class RecordsListPage(QWidget):
         self._table.cellClicked.connect(self._on_cell_clicked)
         self._table.setCursor(Qt.CursorShape.PointingHandCursor)
         self._body_layout.addWidget(self._table)
+        self._body_layout.addStretch(1)
 
         scroll.setWidget(body)
         outer.addWidget(scroll, stretch=1)
@@ -657,13 +615,6 @@ class RecordsListPage(QWidget):
             self._table_title.hide()
             return
 
-        # ── load full records once (for stats / pie charts) ───────────────────
-        self._all_records = {}
-        for summary in self._all_summaries:
-            rec = self._record_service.load(summary.id)
-            if rec is not None:
-                self._all_records[summary.id] = rec
-
         self._empty_label.hide()
         self._table.show()
         self._filter_bar.show()
@@ -671,23 +622,12 @@ class RecordsListPage(QWidget):
         self._separator.show()
         self._table_title.show()
 
-        # ── fill stats (always uses all summaries / all records) ──────────────
-        passes = len(self._all_summaries)
-        unique_users = len({s.user_login for s in self._all_summaries})
-        self._passes_label.setText(f"Прохождений: {passes}")
-        self._users_label.setText(f"Уникальных пользователей: {unique_users}")
+        # ── summary stats (no record loads needed) ────────────────────────────
+        self._passes_label.setText(f"Прохождений: {len(self._all_summaries)}")
+        self._users_label.setText(f"Уникальных пользователей: {len({s.user_login for s in self._all_summaries})}")
 
-        # compute roi_stats from already-loaded records
-        roi_stats: dict[str, list] = {}
-        for rec in self._all_records.values():
-            for item in rec.items:
-                for roi in item.metrics.roi_metrics:
-                    name = roi.get("name", "?")
-                    if name not in roi_stats:
-                        roi_stats[name] = [0, 0, bool(roi.get("first_fixation_required"))]
-                    roi_stats[name][1] += 1
-                    if roi.get("hit"):
-                        roi_stats[name][0] += 1
+        # ── pie charts via single roi-stats request ───────────────────────────
+        roi_stats = self._record_service.get_roi_stats(self._test_id)
 
         while self._pie_row.count():
             item = self._pie_row.takeAt(0)
@@ -698,9 +638,9 @@ class RecordsListPage(QWidget):
             self._pie_header.show()
             self._pie_container.show()
             self._no_roi_label.hide()
-            for idx, (name, vals) in enumerate(roi_stats.items()):
-                color = _ROI_COLORS[idx % len(_ROI_COLORS)]
-                chart = _PieChartWidget(name, vals[0], vals[1], color, first_fixation_required=vals[2])
+            for idx, stat in enumerate(roi_stats):
+                color = stat.color or _ROI_COLORS[idx % len(_ROI_COLORS)]
+                chart = _PieChartWidget(stat.name, stat.hits, stat.total, color, first_fixation_required=stat.first_fixation_required)
                 self._pie_row.addWidget(chart)
         else:
             self._pie_header.hide()
@@ -714,7 +654,7 @@ class RecordsListPage(QWidget):
                 it.widget().deleteLater()
         self._roi_filter_combos.clear()
 
-        roi_names = list(roi_stats.keys())
+        roi_names = [s.name for s in roi_stats]
         self._roi_names = roi_names
         self._setup_table_columns()
         if roi_names:
@@ -744,10 +684,19 @@ class RecordsListPage(QWidget):
         self._refresh_user_combo()
         self._apply_filters()
 
-        # Check if ROI sync is needed
-        if self._test_dao is not None and self._test is not None:
-            if _roi_sync_needed(self._test, self._record_service):
-                self._sync_banner.show()
+        # ── ROI sync check ────────────────────────────────────────────────────
+        if (
+            self._test_dao is not None
+            and self._test is not None
+            and self._record_service.is_roi_sync_needed(self._test.id, self._test.image_regions)
+        ):
+            self._sync_btn.setEnabled(True)
+            self._sync_btn.setText("Синхронизировать зоны интереса")
+            self._sync_label.setText(
+                "Некоторые записи содержат устаревшие данные зон интереса — "
+                "зоны были добавлены или удалены после проведения тестов."
+            )
+            self._sync_banner.show()
 
     def _on_from_dt_changed(self) -> None:
         if not self._filter_from_active:
@@ -778,20 +727,19 @@ class RecordsListPage(QWidget):
         self._on_non_user_filter_changed()
 
     def _setup_table_columns(self) -> None:
-        n = len(self._roi_names)
-        total = 2 + n + 2
+        n_roi = len(self._roi_names)
+        total = 3 + n_roi
         self._table.setColumnCount(total)
-        headers = ["Дата и время", "Пользователь"] + self._roi_names + ["Отчёт", "Экспорт"]
-        self._table.setHorizontalHeaderLabels(headers)
+        labels = ["Дата и время", "Пользователь"] + self._roi_names + ["Управление"]
+        self._table.setHorizontalHeaderLabels(labels)
         hdr = self._table.horizontalHeader()
-        for i in range(total):
+        for i in range(total - 1):
             hdr.setSectionResizeMode(i, QHeaderView.ResizeMode.Interactive)
+        hdr.setSectionResizeMode(total - 1, QHeaderView.ResizeMode.Stretch)
         self._table.setColumnWidth(0, 155)
         self._table.setColumnWidth(1, 120)
-        for i in range(n):
-            self._table.setColumnWidth(2 + i, 80)
-        self._table.setColumnWidth(2 + n, 190)
-        self._table.setColumnWidth(2 + n + 1, 110)
+        for i in range(n_roi):
+            self._table.setColumnWidth(2 + i, 100)
 
     def _on_non_user_filter_changed(self) -> None:
         self._refresh_user_combo()
@@ -834,19 +782,36 @@ class RecordsListPage(QWidget):
         )
 
     def _apply_filters(self) -> None:
-        query = self._build_base_query()
-        selected_user = self._filter_user_combo.currentText()
+        # ROI filter — server-side (only query when active)
+        active_roi = {
+            name: combo.currentIndex()
+            for name, combo in self._roi_filter_combos.items()
+            if combo.currentIndex() != 0
+        }
+        if active_roi:
+            query = self._build_base_query()
+            query.roi_hits = {name: (idx == 1) for name, idx in active_roi.items()}
+            filtered = self._record_service.query(query).items
+        else:
+            filtered = list(self._all_summaries)
+
+        # User filter — client-side
         if self._filter_user_combo.currentIndex() > 0:
-            query.user_login = selected_user
+            selected_user = self._filter_user_combo.currentText()
+            filtered = [s for s in filtered if s.user_login == selected_user]
 
-        result = self._record_service.query(query)
-        filtered = result.items
-
-        n_roi = len(self._roi_names)
-        btn_col = 2 + n_roi
-        export_col = 2 + n_roi + 1
+        # Date filters — client-side (ISO 8601 strings are lexicographically comparable)
+        if self._filter_from_active:
+            date_from = self._filter_from.dateTime().toPyDateTime().isoformat()
+            filtered = [s for s in filtered if s.started_at >= date_from]
+        if self._filter_to_active:
+            date_to = self._filter_to.dateTime().toPyDateTime().isoformat()
+            filtered = [s for s in filtered if s.started_at <= date_to]
 
         self._filtered_summaries = filtered
+
+        n_roi = len(self._roi_names)
+        col_mgmt = 2 + n_roi
 
         self._table.setRowCount(len(filtered))
         for row, summary in enumerate(filtered):
@@ -858,49 +823,80 @@ class RecordsListPage(QWidget):
             login_item.setFont(QFont(FONT_FAMILY, 13))
             self._table.setItem(row, 1, login_item)
 
-            # ROI hit columns
-            rec = self._all_records.get(summary.id)
-            roi_hit_map: dict[str, bool] = {}
-            if rec:
-                for item in rec.items:
-                    for roi in item.metrics.roi_metrics:
-                        name = roi.get("name", "")
-                        roi_hit_map[name] = roi_hit_map.get(name, False) or bool(roi.get("hit"))
+            hit_map: dict[str, bool] = {}
+            for r in summary.roi_hits:
+                raw_name = r["name"]
+                hit = bool(r.get("hit", False))
+                # index by full name
+                hit_map[raw_name] = hit_map.get(raw_name, False) or hit
+                # also index by base name without " (N)" suffix
+                if " (" in raw_name:
+                    base = raw_name.rsplit(" (", 1)[0]
+                    hit_map[base] = hit_map.get(base, False) or hit
+            for i, name in enumerate(self._roi_names):
+                hit = hit_map.get(name)
+                if hit is None:
+                    text, color = "—", TEXT_SECONDARY
+                elif hit:
+                    text, color = "✓", "#30d158"
+                else:
+                    text, color = "✗", "#ff453a"
+                roi_item = QTableWidgetItem(text)
+                roi_item.setFont(QFont(FONT_FAMILY, 14))
+                roi_item.setForeground(QColor(color))
+                roi_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self._table.setItem(row, 2 + i, roi_item)
 
-            for i, roi_name in enumerate(self._roi_names):
-                hit = roi_hit_map.get(roi_name, False)
-                cell = QTableWidgetItem("✓" if hit else "")
-                cell.setFont(QFont(FONT_FAMILY, 15))
-                cell.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                if hit:
-                    cell.setForeground(QColor("#30d158"))
-                self._table.setItem(row, 2 + i, cell)
-
-            view_item = QTableWidgetItem("Посмотреть отчет")
-            view_item.setFont(QFont(FONT_FAMILY, 13))
-            view_item.setForeground(QColor(BUTTON_BG))
-            view_item.setFlags(view_item.flags() | Qt.ItemFlag.ItemIsEnabled)
-            self._table.setItem(row, btn_col, view_item)
-
-            export_item = QTableWidgetItem("Экспорт")
-            export_item.setFont(QFont(FONT_FAMILY, 13))
-            export_item.setForeground(QColor(BUTTON_BG))
-            export_item.setFlags(export_item.flags() | Qt.ItemFlag.ItemIsEnabled)
-            self._table.setItem(row, export_col, export_item)
+            self._table.setCellWidget(row, col_mgmt, self._make_mgmt_widget(summary.id))
 
         self._table.resizeRowsToContents()
+        self._fit_table_height()
+
+    def _make_mgmt_widget(self, record_id: str) -> QWidget:
+        _btn_style = f"""
+            QPushButton {{
+                background: transparent;
+                color: {BUTTON_BG};
+                border: none;
+                font-family: {FONT_FAMILY};
+                font-size: 13px;
+                padding: 4px 8px;
+            }}
+            QPushButton:hover {{ color: {BUTTON_HOVER}; }}
+        """
+        container = QWidget()
+        container.setStyleSheet(f"background: transparent;")
+        layout = QHBoxLayout(container)
+        layout.setContentsMargins(8, 0, 8, 0)
+        layout.setSpacing(4)
+
+        report_btn = QPushButton("Отчёт")
+        report_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        report_btn.setStyleSheet(_btn_style)
+        report_btn.clicked.connect(lambda _, rid=record_id: self._on_view_report(rid))
+        layout.addWidget(report_btn)
+
+        sep = QLabel("|")
+        sep.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent;")
+        layout.addWidget(sep)
+
+        export_btn = QPushButton("Экспорт")
+        export_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        export_btn.setStyleSheet(_btn_style)
+        export_btn.clicked.connect(lambda _, rid=record_id: self._export_record(rid))
+        layout.addWidget(export_btn)
+
+        layout.addStretch()
+        return container
+
+    def _fit_table_height(self) -> None:
+        h = self._table.horizontalHeader().height()
+        for i in range(self._table.rowCount()):
+            h += self._table.rowHeight(i)
+        self._table.setFixedHeight(h + 2)
 
     def _on_cell_clicked(self, row: int, col: int) -> None:
-        if row >= len(self._filtered_summaries):
-            return
-        n_roi = len(self._roi_names)
-        btn_col = 2 + n_roi
-        export_col = 2 + n_roi + 1
-        record_id = self._filtered_summaries[row].id
-        if col == btn_col:
-            self._on_view_report(record_id)
-        elif col == export_col:
-            self._export_record(record_id)
+        pass
 
     def _reset_filters(self) -> None:
         self._clear_from()
@@ -958,7 +954,7 @@ class RecordsListPage(QWidget):
         per_image_rows: list[list] = []
 
         for summary in self._all_summaries:
-            rec = self._all_records.get(summary.id)
+            rec = self._record_service.load(summary.id)
             dt = format_datetime(summary.started_at)
 
             if rec:
@@ -1050,10 +1046,22 @@ class RecordsListPage(QWidget):
         self._sync_btn.setText("Синхронизация зон интереса…")
         self._sync_label.setText("Пересчёт ROI для всех записей…")
 
-        self._sync_worker = _SyncWorker(self._test_dao, self._test_id, self._record_service)
-        self._sync_worker.finished.connect(self._on_sync_done)
-        self._sync_worker.start()
+        def _run() -> None:
+            try:
+                self._test_dao.sync_roi_metrics(self._test_id, self._record_service)
+                QTimer.singleShot(0, self._on_sync_done)
+            except Exception as exc:
+                msg = str(exc)
+                QTimer.singleShot(0, lambda: self._on_sync_error(msg))
+
+        threading.Thread(target=_run, daemon=True).start()
 
     def _on_sync_done(self) -> None:
         self._sync_banner.hide()
         self._load_records()
+
+    def _on_sync_error(self, message: str) -> None:
+        self._sync_btn.setEnabled(True)
+        self._sync_btn.setText("Синхронизировать зоны интереса")
+        self._sync_label.setText("Ошибка синхронизации — попробуйте ещё раз")
+        QMessageBox.warning(self, "Ошибка синхронизации", message)

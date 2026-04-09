@@ -95,6 +95,64 @@ class LocalTestDao(TestDao):
         self._save_meta(tests)
         return updated
 
+    def add_image(self, test_id: str, src: Path) -> TestData:
+        test = self.load(test_id)
+        if test is None:
+            raise FileNotFoundError(test_id)
+        test_dir = self._base / test_id
+        i = len(test.image_filenames) + 1
+        fname = f"{i:03d}{src.suffix}"
+        shutil.copy2(src, test_dir / fname)
+        updated = TestData(
+            id=test_id,
+            name=test.name,
+            cover_filename=test.cover_filename,
+            image_filenames=test.image_filenames + [fname],
+            image_regions=test.image_regions,
+        )
+        tests = [updated if t.id == test_id else t for t in self.load_all()]
+        self._save_meta(tests)
+        return updated
+
+    def update_name(self, test_id: str, name: str) -> TestData:
+        test = self.load(test_id)
+        if test is None:
+            raise FileNotFoundError(test_id)
+        updated = TestData(
+            id=test_id,
+            name=name,
+            cover_filename=test.cover_filename,
+            image_filenames=test.image_filenames,
+            image_regions=test.image_regions,
+        )
+        tests = [updated if t.id == test_id else t for t in self.load_all()]
+        self._save_meta(tests)
+        return updated
+
+    def update_cover(self, test_id: str, cover_src: Path) -> TestData:
+        test = self.load(test_id)
+        if test is None:
+            raise FileNotFoundError(test_id)
+        test_dir = self._base / test_id
+        cover_filename = f"cover{cover_src.suffix}"
+        dest = test_dir / cover_filename
+        if cover_src.resolve() != dest.resolve():
+            shutil.copy2(cover_src, dest)
+        if test.cover_filename != cover_filename:
+            old = test_dir / test.cover_filename
+            if old.is_file():
+                old.unlink()
+        updated = TestData(
+            id=test_id,
+            name=test.name,
+            cover_filename=cover_filename,
+            image_filenames=test.image_filenames,
+            image_regions=test.image_regions,
+        )
+        tests = [updated if t.id == test_id else t for t in self.load_all()]
+        self._save_meta(tests)
+        return updated
+
     def delete(self, test_id: str) -> None:
         tests = [t for t in self.load_all() if t.id != test_id]
         self._save_meta(tests)
@@ -115,6 +173,12 @@ class LocalTestDao(TestDao):
                 t.image_regions = regions
                 break
         self._save_meta(tests)
+
+    def load_by_token(self, code: str) -> TestData | None:
+        raise NotImplementedError("Token lookup is not supported in local mode")
+
+    def get_token(self, test_id: str) -> str:
+        raise NotImplementedError("Token generation is not supported in local mode")
 
     def sync_roi_metrics(self, test_id: str, record_service: RecordService) -> None:
         test = self.load(test_id)
