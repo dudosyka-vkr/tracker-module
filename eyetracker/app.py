@@ -14,7 +14,6 @@ from eyetracker.core.monitor import resolve_screen
 from eyetracker.core.pipeline import EyeTracker
 from eyetracker.core.roi import compute_roi_metrics
 from eyetracker.core.saccade import detect_saccades
-from eyetracker.data.draft_cache import DraftCache
 from eyetracker.data.login import ApiLoginService, LocalLoginService
 from eyetracker.data.record import (
     ApiRecordService,
@@ -51,7 +50,6 @@ class App:
             QMessageBox QPushButton:hover { background-color: #4a4a4a; }
         """)
         self._settings = Settings()
-        self._draft_cache = DraftCache()
 
         server_url = self._settings.server_url
         self._api_client = None
@@ -79,7 +77,6 @@ class App:
             settings=self._settings,
             test_dao=self._test_dao,
             login_service=self._login_service,
-            draft_cache=self._draft_cache,
             record_service=self._record_service,
             on_monitor_changed=self._move_to_target_screen,
         )

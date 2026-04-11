@@ -29,7 +29,6 @@ from PyQt6.QtWidgets import (
 )
 
 from eyetracker.core.monitor import format_screen_label, get_available_screens
-from eyetracker.data.draft_cache import DraftCache
 from eyetracker.data.login import LoginService
 from eyetracker.data.record.service import RecordService
 from eyetracker.data.settings import Settings
@@ -82,7 +81,6 @@ class HomeScreen(QWidget):
         settings: Settings,
         test_dao: TestDao,
         login_service: LoginService,
-        draft_cache: DraftCache,
         record_service: RecordService,
         on_monitor_changed: Callable[[], None] | None = None,
         on_start_test_run_by_token: Callable[[TestData, str, str], None] | None = None,
@@ -95,7 +93,6 @@ class HomeScreen(QWidget):
         self._on_monitor_changed_cb = on_monitor_changed
         self._test_dao = test_dao
         self._login_service = login_service
-        self._draft_cache = draft_cache
         self._record_service = record_service
         self._readiness_page: QWidget | None = None
         self._readiness_test_id: str | None = None
@@ -131,34 +128,6 @@ class HomeScreen(QWidget):
         layout.addWidget(self._content_stack, stretch=1)
 
         self._update_auth_state(self._logged_in)
-        if self._logged_in and self._draft_cache.exists():
-            from PyQt6.QtCore import QTimer
-            QTimer.singleShot(0, self._show_draft_recovery_dialog)
-
-    # ---- Draft recovery ------------------------------------------------------
-
-    def _show_draft_recovery_dialog(self) -> None:
-        draft = self._draft_cache.load()
-        if draft is None:
-            return
-        msg = QMessageBox(self)
-        msg.setWindowTitle("Восстановление")
-        msg.setText("Обнаружен незавершённый черновик. Хотите продолжить?")
-        continue_btn = msg.addButton("Продолжить", QMessageBox.ButtonRole.AcceptRole)
-        no_btn = msg.addButton("Нет", QMessageBox.ButtonRole.DestructiveRole)
-        msg.addButton("Позже", QMessageBox.ButtonRole.RejectRole)
-        msg.exec()
-
-        clicked = msg.clickedButton()
-        if clicked == continue_btn:
-            if draft.draft_type == "edit" and draft.test_id:
-                self._select_sidebar_item("tests")
-                self._show_test_detail(draft.test_id, FormMode.EDIT)
-            else:
-                self._select_sidebar_item("create_test")
-                self._show_create_test_form()
-        elif clicked == no_btn:
-            self._draft_cache.clear()
 
     # ---- Auth state ----------------------------------------------------------
 
@@ -1400,7 +1369,6 @@ class HomeScreen(QWidget):
         self._settings.last_opened_test_id = test_id
         self._detail_page = TestFormPage(dao=self._test_dao, mode=mode, test_data=test)
         if mode == FormMode.EDIT:
-            self._detail_page.set_draft_cache(self._draft_cache, "edit", test_id)
             self._detail_page.back_requested.connect(lambda tid=test_id: self._show_test_detail(tid, FormMode.VIEW))
         else:
             self._detail_page.back_requested.connect(self._back_to_tests)
@@ -1411,12 +1379,6 @@ class HomeScreen(QWidget):
         self._detail_page.test_deleted.connect(self._back_to_tests)
         self._content_stack.addWidget(self._detail_page)
         self._content_stack.setCurrentWidget(self._detail_page)
-
-        if mode == FormMode.EDIT and self._draft_cache.exists():
-            draft = self._draft_cache.load()
-            if draft and draft.draft_type == "edit" and draft.test_id == test_id:
-                self._detail_page.restore_from_draft(draft)
-                QMessageBox.information(self, "Восстановление", "Черновик был восстановлен.")
 
     def _on_run_test(self, test_id: str) -> None:
         test = self._test_dao.load(test_id)
@@ -1599,17 +1561,10 @@ class HomeScreen(QWidget):
     def _show_create_test_form(self) -> None:
         self._remove_detail_page()
         self._detail_page = TestFormPage(dao=self._test_dao, mode=FormMode.CREATE)
-        self._detail_page.set_draft_cache(self._draft_cache, "create")
         self._detail_page.back_requested.connect(self._show_create_test_choice)
         self._detail_page.test_created.connect(self._on_test_created)  # type: ignore[arg-type]
         self._content_stack.addWidget(self._detail_page)
         self._content_stack.setCurrentWidget(self._detail_page)
-
-        if self._draft_cache.exists():
-            draft = self._draft_cache.load()
-            if draft and draft.draft_type == "create":
-                self._detail_page.restore_from_draft(draft)
-                QMessageBox.information(self, "Восстановление", "Черновик был восстановлен.")
 
     def _show_create_test_choice(self) -> None:
         self._remove_detail_page()
