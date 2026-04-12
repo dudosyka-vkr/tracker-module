@@ -95,6 +95,8 @@ class TestInstructionsScreen(QWidget):
                 background-color: {BUTTON_HOVER};
             }}
         """)
+        btn.clicked.connect(on_start)
+
         cancel_btn = QPushButton("Отмена")
         cancel_btn.setFont(QFont(FONT_FAMILY, 15))
         cancel_btn.setFixedHeight(52)

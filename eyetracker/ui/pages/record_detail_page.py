@@ -1,4 +1,4 @@
-"""Record detail page: per-image heatmap tabs + export."""
+"""Record detail page: heatmap, gaze points, fixations + export."""
 
 from __future__ import annotations
 
@@ -20,19 +20,17 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from eyetracker.core.fixation_map import generate_fixation_map
+from eyetracker.core.fixation_map import generate_all_fixations_map, generate_fixation_map
 from eyetracker.core.gaze_points_map import generate_gaze_points_map, generate_saccade_map
 from eyetracker.core.heatmap import generate_heatmap
 from eyetracker.core.report_export import export_record_zip
 from eyetracker.core.roi import overlay_rois
 from eyetracker.core.time_fmt import format_datetime
-from eyetracker.data.record.service import Record, RecordItem, RecordService
+from eyetracker.data.record.service import Record, RecordService
 from eyetracker.data.test import TestDao, TestData
 from eyetracker.ui.theme import (
     BG_MAIN,
     BG_SIDEBAR,
-    BG_SIDEBAR_ACTIVE,
-    BG_SIDEBAR_HOVER,
     BORDER_COLOR,
     BUTTON_BG,
     BUTTON_HOVER,
@@ -43,57 +41,99 @@ from eyetracker.ui.theme import (
 )
 
 
-_BADGE_W = 108
-_BADGE_H = 61  # ~10% smaller than 120×68
+_BADGE_W = 120
+_BADGE_H = 76
 
 
 class _FixationBadge(QWidget):
-    """Small card that shows fixation number and fires on mouse-enter."""
+    """Compact card showing fixation number, start time and duration."""
 
-    def __init__(self, number: int, on_enter,
-                 time_ms: int | None = None, parent=None):
+    _NORMAL_SS = f"""
+        QWidget {{
+            background-color: {BG_SIDEBAR};
+            border: 1px solid {BORDER_COLOR};
+            border-radius: {CORNER_RADIUS}px;
+        }}
+    """
+    _SELECTED_SS = f"""
+        QWidget {{
+            background-color: {BG_SIDEBAR};
+            border: 2px solid {BUTTON_BG};
+            border-radius: {CORNER_RADIUS}px;
+        }}
+    """
+
+    def __init__(
+        self,
+        number: int,
+        on_enter: Callable[[], None] | None = None,
+        on_leave: Callable[[], None] | None = None,
+        on_click: Callable[[], None] | None = None,
+        time_ms: int | None = None,
+        duration_ms: int | None = None,
+        parent: QWidget | None = None,
+    ):
         super().__init__(parent)
-        self._on_enter = on_enter
         self.setFixedSize(_BADGE_W, _BADGE_H)
-        self.setObjectName("FixationBadge")
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self._on_enter = on_enter
+        self._on_leave = on_leave
+        self._on_click = on_click
+        self._selected = False
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
-        self.setStyleSheet(f"""
-            #FixationBadge {{
-                background-color: {BG_SIDEBAR};
-                border: 1px solid {BORDER_COLOR};
-                border-radius: {CORNER_RADIUS}px;
-            }}
-            #FixationBadge:hover {{
-                border-color: {BUTTON_HOVER};
-            }}
-        """)
+        self.setStyleSheet(self._NORMAL_SS)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 4, 8, 4)
-        layout.setSpacing(1)
+        vbox = QVBoxLayout(self)
+        vbox.setContentsMargins(4, 3, 4, 3)
+        vbox.setSpacing(0)
+        vbox.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         num_lbl = QLabel(f"#{number}")
+        num_lbl.setFont(QFont(FONT_FAMILY, 14, QFont.Weight.Bold))
         num_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        num_lbl.setFont(QFont(FONT_FAMILY, 11, QFont.Weight.Bold))
-        num_lbl.setStyleSheet(f"background: transparent; color: {TEXT_PRIMARY};")
-        layout.addWidget(num_lbl)
+        num_lbl.setStyleSheet(f"color: {TEXT_PRIMARY}; background: transparent; border: none;")
+        num_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        vbox.addWidget(num_lbl)
 
         if time_ms is not None:
-            time_lbl = QLabel(f"{time_ms} ms")
-            time_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            time_lbl.setFont(QFont(FONT_FAMILY, 9))
-            time_lbl.setStyleSheet(f"background: transparent; color: {TEXT_SECONDARY};")
-            layout.addWidget(time_lbl)
+            s_lbl = QLabel(f"{time_ms} мс")
+            s_lbl.setFont(QFont(FONT_FAMILY, 10))
+            s_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            s_lbl.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent; border: none;")
+            s_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            vbox.addWidget(s_lbl)
 
-    def enterEvent(self, event) -> None:
-        self._on_enter()
+        if duration_ms is not None:
+            d_lbl = QLabel(f"⏱ {duration_ms} мс")
+            d_lbl.setFont(QFont(FONT_FAMILY, 10))
+            d_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            d_lbl.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent; border: none;")
+            d_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            vbox.addWidget(d_lbl)
+
+    def set_selected(self, selected: bool) -> None:
+        self._selected = selected
+        self.setStyleSheet(self._SELECTED_SS if selected else self._NORMAL_SS)
+
+    def enterEvent(self, event) -> None:  # noqa: N802
         super().enterEvent(event)
+        if self._on_enter is not None:
+            self._on_enter()
+
+    def leaveEvent(self, event) -> None:  # noqa: N802
+        super().leaveEvent(event)
+        if self._on_leave is not None:
+            self._on_leave()
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        event.accept()
+        if self._on_click is not None:
+            self._on_click()
 
 
 class RecordDetailPage(QWidget):
-    """Detail view for a single record with per-image heatmap tabs."""
+    """Detail view for a single test record."""
 
     def __init__(
         self,
@@ -111,8 +151,6 @@ class RecordDetailPage(QWidget):
         self._test_dao = test_dao
         self._record: Record | None = None
         self._test_data: TestData | None = None
-        self._tab_buttons: list[QPushButton] = []
-        self._active_tab = 0
 
         self.setStyleSheet(f"background-color: {BG_MAIN};")
         self._build_ui()
@@ -174,14 +212,7 @@ class RecordDetailPage(QWidget):
         self._subtitle_label.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent;")
         self._layout.addWidget(self._subtitle_label)
 
-        # Tab bar
-        tab_container = QWidget()
-        tab_container.setStyleSheet("background: transparent;")
-        self._tab_bar = QHBoxLayout(tab_container)
-        self._tab_bar.setSpacing(4)
-        self._layout.addWidget(tab_container)
-
-        # Scroll area for the heatmap image
+        # Scroll area for content
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QScrollArea.Shape.NoFrame)
@@ -212,59 +243,7 @@ class RecordDetailPage(QWidget):
         if self._test_dao is not None:
             self._test_data = self._test_dao.load(self._record.test_id)
 
-        self._build_tabs()
-        if self._record.items:
-            self._select_tab(0)
-
-    # ------------------------------------------------------------------
-    # Tabs
-    # ------------------------------------------------------------------
-
-    def _build_tabs(self) -> None:
-        if self._record is None:
-            return
-        for i in range(len(self._record.items)):
-            btn = QPushButton(str(i + 1))
-            btn.setFixedSize(40, 32)
-            btn.setFont(QFont(FONT_FAMILY, 13))
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setCheckable(True)
-            btn.clicked.connect(lambda checked, idx=i: self._select_tab(idx))
-            self._tab_buttons.append(btn)
-            self._tab_bar.addWidget(btn)
-        self._tab_bar.addStretch()
-        self._update_tab_styles()
-
-    def _select_tab(self, index: int) -> None:
-        self._active_tab = index
-        self._update_tab_styles()
-        self._show_item(index)
-
-    def _update_tab_styles(self) -> None:
-        for i, btn in enumerate(self._tab_buttons):
-            if i == self._active_tab:
-                btn.setChecked(True)
-                btn.setStyleSheet(f"""
-                    QPushButton {{
-                        background-color: {BG_SIDEBAR_ACTIVE};
-                        color: white;
-                        border: none;
-                        border-radius: {CORNER_RADIUS}px;
-                    }}
-                """)
-            else:
-                btn.setChecked(False)
-                btn.setStyleSheet(f"""
-                    QPushButton {{
-                        background-color: {BG_SIDEBAR};
-                        color: {TEXT_PRIMARY};
-                        border: 1px solid {BORDER_COLOR};
-                        border-radius: {CORNER_RADIUS}px;
-                    }}
-                    QPushButton:hover {{
-                        background-color: {BG_SIDEBAR_HOVER};
-                    }}
-                """)
+        self._show_content()
 
     # ------------------------------------------------------------------
     # Content rendering
@@ -276,23 +255,23 @@ class RecordDetailPage(QWidget):
             if child.widget():
                 child.widget().deleteLater()
 
-    def _show_item(self, index: int) -> None:
-        if self._record is None or index >= len(self._record.items):
+    def _show_content(self) -> None:
+        if self._record is None:
             return
 
         self._clear_content()
-        item = self._record.items[index]
+        metrics = self._record.metrics
 
-        roi_widget = self._build_roi_metrics_widget(item)
+        roi_widget = self._build_roi_metrics_widget()
         if roi_widget is not None:
             self._content_layout.addWidget(roi_widget)
-        self._content_layout.addWidget(self._build_heatmap_widget(item))
-        self._content_layout.addWidget(self._build_gaze_points_widget(item))
-        self._content_layout.addWidget(self._build_saccade_map_widget(item))
-        self._content_layout.addWidget(self._build_fixation_list(item))
+        self._content_layout.addWidget(self._build_heatmap_widget())
+        self._content_layout.addWidget(self._build_gaze_points_widget())
+        self._content_layout.addWidget(self._build_saccade_map_widget())
+        self._content_layout.addWidget(self._build_fixation_list())
         self._content_layout.addStretch()
 
-    def _build_heatmap_widget(self, item: RecordItem) -> QWidget:
+    def _build_heatmap_widget(self) -> QWidget:
         container = QWidget()
         container.setStyleSheet("background: transparent;")
         vbox = QVBoxLayout(container)
@@ -313,14 +292,14 @@ class RecordDetailPage(QWidget):
             f" border-radius: {CORNER_RADIUS}px; color: {TEXT_SECONDARY};"
         )
 
-        image_path = self._resolve_image_path(item)
+        image_path = self._resolve_image_path()
         if image_path is None or not image_path.exists():
-            label.setText(f"Изображение не найдено: {item.image_filename}")
+            label.setText("Изображение не найдено")
         else:
             try:
-                rgb = generate_heatmap(image_path, item.metrics.gaze_groups)
+                rgb = generate_heatmap(image_path, self._record.metrics.gaze_groups)
                 rois = (
-                    self._test_data.image_regions.get(item.image_filename, [])
+                    self._test_data.aoi
                     if self._test_data is not None else []
                 )
                 rgb = overlay_rois(rgb, rois)
@@ -337,7 +316,7 @@ class RecordDetailPage(QWidget):
         vbox.addWidget(label)
         return container
 
-    def _build_gaze_points_widget(self, item: RecordItem) -> QWidget:
+    def _build_gaze_points_widget(self) -> QWidget:
         container = QWidget()
         container.setStyleSheet("background: transparent;")
         vbox = QVBoxLayout(container)
@@ -358,12 +337,12 @@ class RecordDetailPage(QWidget):
             f" border-radius: {CORNER_RADIUS}px; color: {TEXT_SECONDARY};"
         )
 
-        image_path = self._resolve_image_path(item)
+        image_path = self._resolve_image_path()
         if image_path is None or not image_path.exists():
-            label.setText(f"Изображение не найдено: {item.image_filename}")
+            label.setText("Изображение не найдено")
         else:
             try:
-                rgb = generate_gaze_points_map(image_path, item.metrics.gaze_groups)
+                rgb = generate_gaze_points_map(image_path, self._record.metrics.gaze_groups)
                 label.setPixmap(
                     _rgb_array_to_pixmap(rgb).scaled(
                         960, 540,
@@ -377,7 +356,7 @@ class RecordDetailPage(QWidget):
         vbox.addWidget(label)
         return container
 
-    def _build_saccade_map_widget(self, item: RecordItem) -> QWidget:
+    def _build_saccade_map_widget(self) -> QWidget:
         container = QWidget()
         container.setStyleSheet("background: transparent;")
         vbox = QVBoxLayout(container)
@@ -398,12 +377,12 @@ class RecordDetailPage(QWidget):
             f" border-radius: {CORNER_RADIUS}px; color: {TEXT_SECONDARY};"
         )
 
-        image_path = self._resolve_image_path(item)
+        image_path = self._resolve_image_path()
         if image_path is None or not image_path.exists():
-            label.setText(f"Изображение не найдено: {item.image_filename}")
+            label.setText("Изображение не найдено")
         else:
             try:
-                rgb = generate_saccade_map(image_path, item.metrics.saccades)
+                rgb = generate_saccade_map(image_path, self._record.metrics.saccades)
                 label.setPixmap(
                     _rgb_array_to_pixmap(rgb).scaled(
                         960, 540,
@@ -417,14 +396,14 @@ class RecordDetailPage(QWidget):
         vbox.addWidget(label)
         return container
 
-    def _build_fixation_list(self, item: RecordItem) -> QWidget:
+    def _build_fixation_list(self) -> QWidget:
         container = QWidget()
         container.setStyleSheet("background: transparent;")
         vbox = QVBoxLayout(container)
         vbox.setContentsMargins(0, 16, 0, 0)
         vbox.setSpacing(8)
 
-        fixations = item.metrics.fixations
+        fixations = self._record.metrics.fixations
         heading = QLabel(f"Фиксации ({len(fixations)})")
         heading.setFont(QFont(FONT_FAMILY, 16, QFont.Weight.Bold))
         heading.setStyleSheet(f"color: {TEXT_PRIMARY}; background: transparent;")
@@ -438,9 +417,9 @@ class RecordDetailPage(QWidget):
             return container
 
         sorted_fixations = sorted(fixations, key=lambda fx: 0 if fx.get("is_first") else 1)
-        image_path = self._resolve_image_path(item)
+        image_path = self._resolve_image_path()
         item_rois = (
-            self._test_data.image_regions.get(item.image_filename, [])
+            self._test_data.aoi
             if self._test_data is not None else []
         )
 
@@ -457,15 +436,57 @@ class RecordDetailPage(QWidget):
         preview.setFont(QFont(FONT_FAMILY, 13))
         vbox.addWidget(preview)
 
-        # --- Badge grid below the preview (4 per row, centered) ---
+        # --- Badge grid below the preview (8 per row, centered) ---
+        all_badges: list[_FixationBadge] = []
         grid_widget = QWidget()
         grid_widget.setStyleSheet("background: transparent;")
         grid_vbox = QVBoxLayout(grid_widget)
         grid_vbox.setContentsMargins(0, 8, 0, 0)
         grid_vbox.setSpacing(8)
 
-        for row_start in range(0, len(sorted_fixations), 4):
-            chunk = sorted_fixations[row_start:row_start + 4]
+        selected_indices: set[int] = set()
+
+        def _render_indices(indices: list[int]) -> None:
+            if not indices or image_path is None or not image_path.exists():
+                return
+            try:
+                fxs = [sorted_fixations[i] for i in indices]
+                nums = [i + 1 for i in indices]
+                rgb = generate_all_fixations_map(image_path, fxs, numbers=nums)
+                if item_rois:
+                    rgb = overlay_rois(rgb, item_rois)
+            except Exception:
+                return
+            preview.setPixmap(
+                _rgb_array_to_pixmap(rgb).scaled(
+                    960, 540,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            )
+
+        def _render_selected() -> None:
+            _render_indices(sorted(selected_indices))
+
+        def _render_with_hover(hovered_idx: int) -> None:
+            indices = sorted(selected_indices | {hovered_idx})
+            _render_indices(indices)
+
+        def _toggle_badge(idx: int) -> None:
+            badge = all_badges[idx]
+            if badge._selected:
+                badge.set_selected(False)
+                selected_indices.discard(idx)
+            else:
+                badge.set_selected(True)
+                selected_indices.add(idx)
+            if selected_indices:
+                _render_selected()
+            else:
+                preview.setText("Наведите на строку таблицы для предпросмотра")
+
+        for row_start in range(0, len(sorted_fixations), 8):
+            chunk = sorted_fixations[row_start:row_start + 8]
             row_w = QWidget()
             row_w.setStyleSheet("background: transparent;")
             row_h = QHBoxLayout(row_w)
@@ -476,16 +497,24 @@ class RecordDetailPage(QWidget):
                 idx = row_start + offset
                 badge = _FixationBadge(
                     number=idx + 1,
-                    on_enter=lambda i=idx, _fx=sorted_fixations, _path=image_path,
-                                    _lbl=preview, _rois=item_rois:
-                        self._update_fixation_preview(_fx, i, _path, _lbl, _rois),
-                    time_ms=fx.get("time_ms"),
+                    on_enter=lambda i=idx: _render_with_hover(i),
+                    on_leave=lambda: _render_selected() if selected_indices else
+                        preview.setText("Наведите на строку таблицы для предпросмотра"),
+                    on_click=lambda i=idx: _toggle_badge(i),
+                    time_ms=fx.get("start_ms"),
+                    duration_ms=fx.get("duration_ms"),
                 )
+                all_badges.append(badge)
                 row_h.addWidget(badge)
             row_h.addStretch()
             grid_vbox.addWidget(row_w)
 
         vbox.addWidget(grid_widget)
+
+        if all_badges:
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(0, lambda: _toggle_badge(0))
+
         return container
 
     def _update_fixation_preview(
@@ -513,13 +542,13 @@ class RecordDetailPage(QWidget):
             )
         )
 
-    def _resolve_image_path(self, item: RecordItem) -> Path | None:
+    def _resolve_image_path(self) -> Path | None:
         if self._test_dao is None or self._test_data is None:
             return None
-        return self._test_dao.get_image_path(self._test_data, item.image_filename)
+        return self._test_dao.get_image_path(self._test_data)
 
-    def _build_roi_metrics_widget(self, item: RecordItem) -> QWidget | None:
-        rois = item.metrics.roi_metrics
+    def _build_roi_metrics_widget(self) -> QWidget | None:
+        rois = self._record.metrics.roi_metrics
         if not rois:
             return None
 
@@ -581,6 +610,8 @@ class RecordDetailPage(QWidget):
 
         return container
 
+    # ------------------------------------------------------------------
+    # Fixation recalculation
     # ------------------------------------------------------------------
     # Export
     # ------------------------------------------------------------------

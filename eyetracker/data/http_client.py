@@ -65,9 +65,10 @@ class HttpClient:
         json: dict | None = None,
         files=None,
         data: dict | None = None,
+        params=None,
     ) -> dict:
         logger.info("POST %s body=%s data=%s files=%s", self._url(path), json, data, _file_names(files))
-        resp = self._session.post(self._url(path), json=json, files=files, data=data, timeout=self._timeout)
+        resp = self._session.post(self._url(path), json=json, files=files, data=data, params=params, timeout=self._timeout)
         return self._parse(resp)
 
     def put(

@@ -9,7 +9,6 @@ from dataclasses import asdict
 from pathlib import Path
 from uuid import uuid4
 
-from eyetracker.core.roi import compute_roi_metrics
 from eyetracker.data.record.service import RecordQuery, RecordService
 from eyetracker.data.test.dao import TestDao, TestData
 
@@ -26,25 +25,18 @@ class LocalTestDao(TestDao):
 
     # -- public API ----------------------------------------------------------
 
-    def create(self, name: str, cover_src: Path, image_srcs: list[Path]) -> TestData:
+    def create(self, name: str, image_src: Path) -> TestData:
         test_id = uuid4().hex[:12]
         test_dir = self._base / test_id
         test_dir.mkdir(parents=True, exist_ok=True)
 
-        cover_filename = f"cover{cover_src.suffix}"
-        shutil.copy2(cover_src, test_dir / cover_filename)
-
-        image_filenames: list[str] = []
-        for i, src in enumerate(image_srcs, start=1):
-            fname = f"{i:03d}{src.suffix}"
-            shutil.copy2(src, test_dir / fname)
-            image_filenames.append(fname)
+        image_filename = f"image{image_src.suffix}"
+        shutil.copy2(image_src, test_dir / image_filename)
 
         test = TestData(
             id=test_id,
             name=name,
-            cover_filename=cover_filename,
-            image_filenames=image_filenames,
+            image_filename=image_filename,
         )
         self._append_meta(test)
         return test
@@ -57,62 +49,13 @@ class LocalTestDao(TestDao):
             raw = json.loads(meta_path.read_text(encoding="utf-8"))
             if not isinstance(raw, list):
                 return []
-            return [TestData(**{**{"image_regions": {}}, **item}) for item in raw]
+            return [TestData(**{**{"aoi": []}, **item}) for item in raw]
         except (json.JSONDecodeError, OSError, TypeError, KeyError) as exc:
             logger.warning("Failed to load tests meta: %s", exc)
             return []
 
     def load(self, test_id: str) -> TestData | None:
         return next((t for t in self.load_all() if t.id == test_id), None)
-
-    def update(self, test_id: str, name: str, cover_src: Path, image_srcs: list[Path]) -> TestData:
-        test_dir = self._base / test_id
-        tmp_dir = self._base / f"{test_id}_tmp"
-        tmp_dir.mkdir(parents=True, exist_ok=True)
-
-        cover_filename = f"cover{cover_src.suffix}"
-        shutil.copy2(cover_src, tmp_dir / cover_filename)
-
-        image_filenames: list[str] = []
-        for i, src in enumerate(image_srcs, start=1):
-            fname = f"{i:03d}{src.suffix}"
-            shutil.copy2(src, tmp_dir / fname)
-            image_filenames.append(fname)
-
-        if test_dir.is_dir():
-            shutil.rmtree(test_dir)
-        tmp_dir.rename(test_dir)
-
-        existing = next((t for t in self.load_all() if t.id == test_id), None)
-        updated = TestData(
-            id=test_id,
-            name=name,
-            cover_filename=cover_filename,
-            image_filenames=image_filenames,
-            image_regions=existing.image_regions if existing is not None else {},
-        )
-        tests = [updated if t.id == test_id else t for t in self.load_all()]
-        self._save_meta(tests)
-        return updated
-
-    def add_image(self, test_id: str, src: Path) -> TestData:
-        test = self.load(test_id)
-        if test is None:
-            raise FileNotFoundError(test_id)
-        test_dir = self._base / test_id
-        i = len(test.image_filenames) + 1
-        fname = f"{i:03d}{src.suffix}"
-        shutil.copy2(src, test_dir / fname)
-        updated = TestData(
-            id=test_id,
-            name=test.name,
-            cover_filename=test.cover_filename,
-            image_filenames=test.image_filenames + [fname],
-            image_regions=test.image_regions,
-        )
-        tests = [updated if t.id == test_id else t for t in self.load_all()]
-        self._save_meta(tests)
-        return updated
 
     def update_name(self, test_id: str, name: str) -> TestData:
         test = self.load(test_id)
@@ -121,33 +64,8 @@ class LocalTestDao(TestDao):
         updated = TestData(
             id=test_id,
             name=name,
-            cover_filename=test.cover_filename,
-            image_filenames=test.image_filenames,
-            image_regions=test.image_regions,
-        )
-        tests = [updated if t.id == test_id else t for t in self.load_all()]
-        self._save_meta(tests)
-        return updated
-
-    def update_cover(self, test_id: str, cover_src: Path) -> TestData:
-        test = self.load(test_id)
-        if test is None:
-            raise FileNotFoundError(test_id)
-        test_dir = self._base / test_id
-        cover_filename = f"cover{cover_src.suffix}"
-        dest = test_dir / cover_filename
-        if cover_src.resolve() != dest.resolve():
-            shutil.copy2(cover_src, dest)
-        if test.cover_filename != cover_filename:
-            old = test_dir / test.cover_filename
-            if old.is_file():
-                old.unlink()
-        updated = TestData(
-            id=test_id,
-            name=test.name,
-            cover_filename=cover_filename,
-            image_filenames=test.image_filenames,
-            image_regions=test.image_regions,
+            image_filename=test.image_filename,
+            aoi=test.aoi,
         )
         tests = [updated if t.id == test_id else t for t in self.load_all()]
         self._save_meta(tests)
@@ -160,17 +78,14 @@ class LocalTestDao(TestDao):
         if test_dir.is_dir():
             shutil.rmtree(test_dir)
 
-    def get_cover_path(self, test: TestData) -> Path:
-        return self._base / test.id / test.cover_filename
+    def get_image_path(self, test: TestData) -> Path:
+        return self._base / test.id / test.image_filename
 
-    def get_image_path(self, test: TestData, filename: str) -> Path:
-        return self._base / test.id / filename
-
-    def save_regions(self, test_id: str, regions: dict[str, list[dict]]) -> None:
+    def save_aoi(self, test_id: str, aoi: list[dict]) -> None:
         tests = self.load_all()
         for t in tests:
             if t.id == test_id:
-                t.image_regions = regions
+                t.aoi = aoi
                 break
         self._save_meta(tests)
 
@@ -180,21 +95,19 @@ class LocalTestDao(TestDao):
     def get_token(self, test_id: str) -> str:
         raise NotImplementedError("Token generation is not supported in local mode")
 
-    def sync_roi_metrics(self, test_id: str, record_service: RecordService) -> None:
+    def sync_aoi_metrics(self, test_id: str, record_service: RecordService) -> None:
         test = self.load(test_id)
         if test is None:
             return
+        from eyetracker.core.roi import compute_roi_metrics
         result = record_service.query(RecordQuery(test_id=test_id, page_size=10_000))
         for summary in result.items:
             record = record_service.load(summary.id)
             if record is None:
                 continue
-            for item in record.items:
-                item.metrics.roi_metrics = compute_roi_metrics(
-                    test.image_regions,
-                    item.image_filename,
-                    item.metrics.fixations,
-                )
+            record.metrics.roi_metrics = compute_roi_metrics(
+                test.aoi, record.metrics.fixations,
+            )
             record_service.save(record)
 
     # -- private helpers -----------------------------------------------------

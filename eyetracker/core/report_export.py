@@ -25,87 +25,86 @@ def export_record_zip(
 ) -> None:
     """Create a zip archive for *record*.
 
-    Structure when image sources are available::
+    Structure when image source is available::
 
         report.json
-        image_1/
+        image/
             original.<ext>
             heatmap.png
+            fixation_map.png
+            gaze_points.png
+            saccade_map.png
             metrics.json
-        image_2/
-            ...
 
-    Falls back to a flat ``image_N.json`` layout when *test_dao* / *test_data*
-    are not provided or an image file cannot be found.
+    Falls back to a flat ``metrics.json`` layout when *test_dao* / *test_data*
+    are not provided or the image file cannot be found.
     """
     with zipfile.ZipFile(save_path, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("report.json", json.dumps(asdict(record), indent=2, ensure_ascii=False))
 
-        for item in record.items:
-            idx = item.image_index + 1
-            folder = f"image_{idx}"
-            metrics_json = json.dumps(asdict(item.metrics), indent=2, ensure_ascii=False)
+        metrics = record.metrics
+        metrics_json = json.dumps(asdict(metrics), indent=2, ensure_ascii=False)
+        folder = "image"
 
-            image_path: Path | None = None
-            if test_dao is not None and test_data is not None:
-                candidate = test_dao.get_image_path(test_data, item.image_filename)
-                if candidate.exists():
-                    image_path = candidate
+        image_path: Path | None = None
+        if test_dao is not None and test_data is not None:
+            candidate = test_dao.get_image_path(test_data)
+            if candidate.exists():
+                image_path = candidate
 
-            if image_path is None:
-                # Fallback: flat json only (no image sources available)
-                zf.writestr(f"{folder}/metrics.json", metrics_json)
-                continue
-
-            # Original image
-            suffix = image_path.suffix or ".png"
-            zf.write(image_path, f"{folder}/original{suffix}")
-
-            rois = test_data.image_regions.get(item.image_filename, []) if test_data else []
-
-            # Heatmap image
-            try:
-                rgb = generate_heatmap(image_path, item.metrics.gaze_groups)
-                rgb = overlay_rois(rgb, rois)
-                bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
-                ok, buf = cv2.imencode(".png", bgr)
-                if ok:
-                    zf.writestr(f"{folder}/heatmap.png", buf.tobytes())
-            except Exception:
-                pass
-
-            # Fixation map image
-            if item.metrics.fixations:
-                try:
-                    rgb_fix = generate_all_fixations_map(image_path, item.metrics.fixations)
-                    rgb_fix = overlay_rois(rgb_fix, rois)
-                    bgr_fix = cv2.cvtColor(rgb_fix, cv2.COLOR_RGB2BGR)
-                    ok_fix, buf_fix = cv2.imencode(".png", bgr_fix)
-                    if ok_fix:
-                        zf.writestr(f"{folder}/fixation_map.png", buf_fix.tobytes())
-                except Exception:
-                    pass
-
-            # Gaze points map image
-            try:
-                rgb_gp = generate_gaze_points_map(image_path, item.metrics.gaze_groups)
-                bgr_gp = cv2.cvtColor(rgb_gp, cv2.COLOR_RGB2BGR)
-                ok_gp, buf_gp = cv2.imencode(".png", bgr_gp)
-                if ok_gp:
-                    zf.writestr(f"{folder}/gaze_points.png", buf_gp.tobytes())
-            except Exception:
-                pass
-
-            # Saccade map image
-            if item.metrics.saccades:
-                try:
-                    rgb_sc = generate_saccade_map(image_path, item.metrics.saccades)
-                    bgr_sc = cv2.cvtColor(rgb_sc, cv2.COLOR_RGB2BGR)
-                    ok_sc, buf_sc = cv2.imencode(".png", bgr_sc)
-                    if ok_sc:
-                        zf.writestr(f"{folder}/saccade_map.png", buf_sc.tobytes())
-                except Exception:
-                    pass
-
-            # Metrics JSON
+        if image_path is None:
             zf.writestr(f"{folder}/metrics.json", metrics_json)
+            return
+
+        # Original image
+        suffix = image_path.suffix or ".png"
+        zf.write(image_path, f"{folder}/original{suffix}")
+
+        rois = test_data.aoi if test_data else []
+
+        # Heatmap image
+        try:
+            rgb = generate_heatmap(image_path, metrics.gaze_groups)
+            rgb = overlay_rois(rgb, rois)
+            bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+            ok, buf = cv2.imencode(".png", bgr)
+            if ok:
+                zf.writestr(f"{folder}/heatmap.png", buf.tobytes())
+        except Exception:
+            pass
+
+        # Fixation map image
+        if metrics.fixations:
+            try:
+                rgb_fix = generate_all_fixations_map(image_path, metrics.fixations)
+                rgb_fix = overlay_rois(rgb_fix, rois)
+                bgr_fix = cv2.cvtColor(rgb_fix, cv2.COLOR_RGB2BGR)
+                ok_fix, buf_fix = cv2.imencode(".png", bgr_fix)
+                if ok_fix:
+                    zf.writestr(f"{folder}/fixation_map.png", buf_fix.tobytes())
+            except Exception:
+                pass
+
+        # Gaze points map image
+        try:
+            rgb_gp = generate_gaze_points_map(image_path, metrics.gaze_groups)
+            bgr_gp = cv2.cvtColor(rgb_gp, cv2.COLOR_RGB2BGR)
+            ok_gp, buf_gp = cv2.imencode(".png", bgr_gp)
+            if ok_gp:
+                zf.writestr(f"{folder}/gaze_points.png", buf_gp.tobytes())
+        except Exception:
+            pass
+
+        # Saccade map image
+        if metrics.saccades:
+            try:
+                rgb_sc = generate_saccade_map(image_path, metrics.saccades)
+                bgr_sc = cv2.cvtColor(rgb_sc, cv2.COLOR_RGB2BGR)
+                ok_sc, buf_sc = cv2.imencode(".png", bgr_sc)
+                if ok_sc:
+                    zf.writestr(f"{folder}/saccade_map.png", buf_sc.tobytes())
+            except Exception:
+                pass
+
+        # Metrics JSON
+        zf.writestr(f"{folder}/metrics.json", metrics_json)

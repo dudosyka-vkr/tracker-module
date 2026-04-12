@@ -16,7 +16,6 @@ def dao(tmp_path: Path) -> LocalTestDao:
 @pytest.fixture()
 def sample_image(tmp_path: Path) -> Path:
     """Create a tiny valid PNG file."""
-    # Minimal 1x1 red PNG
     import struct
     import zlib
 
@@ -42,31 +41,30 @@ def sample_jpg(tmp_path: Path) -> Path:
     return img
 
 
-def test_create_copies_files(dao: LocalTestDao, sample_image: Path):
-    test = dao.create("My Test", cover_src=sample_image, image_srcs=[sample_image])
+def test_create_copies_file(dao: LocalTestDao, sample_image: Path):
+    test = dao.create("My Test", image_src=sample_image)
 
     assert test.name == "My Test"
     assert test.id  # non-empty
-    assert dao.get_cover_path(test).is_file()
-    assert dao.get_image_path(test, test.image_filenames[0]).is_file()
+    assert dao.get_image_path(test).is_file()
 
 
 def test_create_generates_unique_id(dao: LocalTestDao, sample_image: Path):
-    t1 = dao.create("A", cover_src=sample_image, image_srcs=[sample_image])
-    t2 = dao.create("B", cover_src=sample_image, image_srcs=[sample_image])
+    t1 = dao.create("A", image_src=sample_image)
+    t2 = dao.create("B", image_src=sample_image)
     assert t1.id != t2.id
 
 
 def test_load_all_after_create(dao: LocalTestDao, sample_image: Path):
-    dao.create("A", cover_src=sample_image, image_srcs=[sample_image])
-    dao.create("B", cover_src=sample_image, image_srcs=[sample_image])
+    dao.create("A", image_src=sample_image)
+    dao.create("B", image_src=sample_image)
     tests = dao.load_all()
     assert len(tests) == 2
     assert {t.name for t in tests} == {"A", "B"}
 
 
 def test_load_by_id(dao: LocalTestDao, sample_image: Path):
-    created = dao.create("X", cover_src=sample_image, image_srcs=[sample_image])
+    created = dao.create("X", image_src=sample_image)
     loaded = dao.load(created.id)
     assert loaded is not None
     assert loaded.name == "X"
@@ -78,8 +76,8 @@ def test_load_nonexistent(dao: LocalTestDao):
 
 
 def test_delete_removes_files_and_meta(dao: LocalTestDao, sample_image: Path):
-    test = dao.create("Del", cover_src=sample_image, image_srcs=[sample_image])
-    test_dir = dao.get_cover_path(test).parent
+    test = dao.create("Del", image_src=sample_image)
+    test_dir = dao.get_image_path(test).parent
     assert test_dir.is_dir()
 
     dao.delete(test.id)
@@ -88,18 +86,9 @@ def test_delete_removes_files_and_meta(dao: LocalTestDao, sample_image: Path):
     assert dao.load_all() == []
 
 
-def test_get_cover_path(dao: LocalTestDao, sample_image: Path):
-    test = dao.create("C", cover_src=sample_image, image_srcs=[sample_image])
-    cover = dao.get_cover_path(test)
-    assert cover.name == f"cover{sample_image.suffix}"
-    assert cover.is_file()
-
-
 def test_get_image_path(dao: LocalTestDao, sample_image: Path):
-    test = dao.create("I", cover_src=sample_image, image_srcs=[sample_image, sample_image])
-    assert len(test.image_filenames) == 2
-    for fn in test.image_filenames:
-        assert dao.get_image_path(test, fn).is_file()
+    test = dao.create("I", image_src=sample_image)
+    assert dao.get_image_path(test).is_file()
 
 
 def test_load_all_empty(dao: LocalTestDao):
@@ -113,19 +102,14 @@ def test_load_all_corrupt_json(dao: LocalTestDao):
     assert dao.load_all() == []
 
 
-def test_cover_preserves_extension(dao: LocalTestDao, sample_jpg: Path):
-    test = dao.create("Ext", cover_src=sample_jpg, image_srcs=[sample_jpg])
-    assert test.cover_filename == "cover.jpg"
+def test_image_preserves_extension(dao: LocalTestDao, sample_jpg: Path):
+    test = dao.create("Ext", image_src=sample_jpg)
+    assert test.image_filename.endswith(".jpg")
 
 
-def test_image_filenames_numbered(dao: LocalTestDao, sample_image: Path):
-    test = dao.create("Num", cover_src=sample_image, image_srcs=[sample_image, sample_image, sample_image])
-    assert test.image_filenames == ["001.png", "002.png", "003.png"]
-
-
-def test_update_changes_name(dao: LocalTestDao, sample_image: Path):
-    test = dao.create("Old", cover_src=sample_image, image_srcs=[sample_image])
-    updated = dao.update(test.id, "New", cover_src=sample_image, image_srcs=[sample_image])
+def test_update_name(dao: LocalTestDao, sample_image: Path):
+    test = dao.create("Old", image_src=sample_image)
+    updated = dao.update_name(test.id, "New")
     assert updated.name == "New"
     assert updated.id == test.id
     loaded = dao.load(test.id)
@@ -133,45 +117,24 @@ def test_update_changes_name(dao: LocalTestDao, sample_image: Path):
     assert loaded.name == "New"
 
 
-def test_update_replaces_files(dao: LocalTestDao, sample_image: Path, sample_jpg: Path):
-    test = dao.create("T", cover_src=sample_image, image_srcs=[sample_image])
-    updated = dao.update(test.id, "T", cover_src=sample_jpg, image_srcs=[sample_jpg, sample_jpg])
-    assert updated.cover_filename == "cover.jpg"
-    assert len(updated.image_filenames) == 2
-    assert dao.get_cover_path(updated).is_file()
-
-
-def test_update_preserves_other_tests(dao: LocalTestDao, sample_image: Path):
-    t1 = dao.create("A", cover_src=sample_image, image_srcs=[sample_image])
-    t2 = dao.create("B", cover_src=sample_image, image_srcs=[sample_image])
-    dao.update(t1.id, "A2", cover_src=sample_image, image_srcs=[sample_image])
-    all_tests = dao.load_all()
-    assert len(all_tests) == 2
-    names = {t.name for t in all_tests}
-    assert names == {"A2", "B"}
-
-
-def test_save_regions(dao: LocalTestDao, sample_image: Path):
-    test = dao.create("T1", sample_image, [sample_image])
-    regions = {
-        "001.png": [
-            {"name": "Area1", "points": [{"x": 0.1, "y": 0.1}, {"x": 0.5, "y": 0.1}, {"x": 0.3, "y": 0.5}]},
-        ]
-    }
-    dao.save_regions(test.id, regions)
+def test_save_aoi(dao: LocalTestDao, sample_image: Path):
+    test = dao.create("T1", image_src=sample_image)
+    aoi = [
+        {"name": "Area1", "points": [{"x": 0.1, "y": 0.1}, {"x": 0.5, "y": 0.1}, {"x": 0.3, "y": 0.5}]},
+    ]
+    dao.save_aoi(test.id, aoi)
     reloaded = dao.load(test.id)
     assert reloaded is not None
-    assert reloaded.image_regions == regions
+    assert reloaded.aoi == aoi
 
 
-def test_load_old_test_without_regions_field(dao: LocalTestDao, sample_image: Path):
-    test = dao.create("T2", sample_image, [sample_image])
+def test_load_old_test_without_aoi_field(dao: LocalTestDao, sample_image: Path):
+    test = dao.create("T2", image_src=sample_image)
     meta_path = dao._meta_path()
-    import json
     data = json.loads(meta_path.read_text())
     for item in data:
-        item.pop("image_regions", None)
+        item.pop("aoi", None)
     meta_path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
     reloaded = dao.load(test.id)
     assert reloaded is not None
-    assert reloaded.image_regions == {}
+    assert reloaded.aoi == []

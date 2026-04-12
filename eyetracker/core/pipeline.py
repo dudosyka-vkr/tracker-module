@@ -444,6 +444,7 @@ class EyeTracker:
         self._latest_landmarks: list | None = None
 
         self._smoothing = DataWindow(4)
+        self.smoothing_window_size = 4
         self._callback: Callable | None = None
         self._clock_start = 0.0
 
@@ -608,6 +609,10 @@ class EyeTracker:
             elapsed = time.time() - self._clock_start
 
             if gaze:
+                # Sliding-window smoothing: average gaze over the last N predictions
+                # to reduce jitter without introducing significant latency.
+                if self._smoothing.window_size != self.smoothing_window_size:
+                    self._smoothing = DataWindow(self.smoothing_window_size)
                 self._smoothing.push(gaze)
                 sx = sum(self._smoothing.get(i)["x"] for i in range(self._smoothing.length)) / self._smoothing.length
                 sy = sum(self._smoothing.get(i)["y"] for i in range(self._smoothing.length)) / self._smoothing.length

@@ -10,9 +10,8 @@ from pathlib import Path
 
 from eyetracker.data.record.service import (
     Record,
-    RecordItem,
-    RecordItemMetrics,
     RecordListResult,
+    RecordMetrics,
     RecordQuery,
     RecordService,
     RecordSummary,
@@ -79,37 +78,35 @@ class LocalRecordService(RecordService):
             return None
         return self._read_record(path)
 
-    def get_roi_stats(self, test_id: str) -> list[RoiStat]:
+    def get_aoi_stats(self, test_id: str) -> list[RoiStat]:
         result = self.query(RecordQuery(test_id=test_id, page_size=10_000))
         stats: dict[str, list] = {}  # name -> [hits, total, color, first_fixation_required]
         for summary in result.items:
             record = self.load(summary.id)
             if record is None:
                 continue
-            for item in record.items:
-                for roi in item.metrics.roi_metrics:
-                    name = roi.get("name", "?")
-                    if name not in stats:
-                        stats[name] = [0, 0, roi.get("color", "#0a84ff"), bool(roi.get("first_fixation_required"))]
-                    stats[name][1] += 1
-                    if roi.get("hit"):
-                        stats[name][0] += 1
+            for roi in record.metrics.roi_metrics:
+                name = roi.get("name", "?")
+                if name not in stats:
+                    stats[name] = [0, 0, roi.get("color", "#0a84ff"), bool(roi.get("first_fixation_required"))]
+                stats[name][1] += 1
+                if roi.get("hit"):
+                    stats[name][0] += 1
         return [
             RoiStat(name=name, color=v[2], hits=v[0], total=v[1], first_fixation_required=v[3])
             for name, v in stats.items()
         ]
 
-    def is_roi_sync_needed(self, test_id: str, image_regions: dict) -> bool:
+    def is_aoi_sync_needed(self, test_id: str, aoi: list[dict]) -> bool:
+        current_names = {r["name"] for r in aoi}
         result = self.query(RecordQuery(test_id=test_id, page_size=10_000))
         for summary in result.items:
             record = self.load(summary.id)
             if record is None:
                 continue
-            for item in record.items:
-                current_names = {r["name"] for r in image_regions.get(item.image_filename, [])}
-                record_names = {r["name"] for r in item.metrics.roi_metrics}
-                if current_names != record_names:
-                    return True
+            record_names = {r["name"] for r in record.metrics.roi_metrics}
+            if current_names != record_names:
+                return True
         return False
 
     def suggest_users(self, params: RecordQuery) -> list[str]:
@@ -131,12 +128,10 @@ class LocalRecordService(RecordService):
             record = self.load(summary.id)
             if record is None:
                 continue
-            # Aggregate: was each named ROI hit in any image of this record?
             hit_map: dict[str, bool] = {}
-            for item in record.items:
-                for roi in item.metrics.roi_metrics:
-                    name = roi.get("name", "")
-                    hit_map[name] = hit_map.get(name, False) or bool(roi.get("hit"))
+            for roi in record.metrics.roi_metrics:
+                name = roi.get("name", "")
+                hit_map[name] = hit_map.get(name, False) or bool(roi.get("hit"))
             if all(hit_map.get(name, False) == required for name, required in roi_hits.items()):
                 result.append(summary)
         return result
@@ -172,20 +167,14 @@ class LocalRecordService(RecordService):
     def _read_record(path: Path) -> Record | None:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-            items = [
-                RecordItem(
-                    image_filename=it["image_filename"],
-                    image_index=it["image_index"],
-                    metrics=RecordItemMetrics(
-                        gaze_groups=it["metrics"]["gaze_groups"],
-                        fixations=it["metrics"].get("fixations", []),
-                        first_fixation_time_ms=it["metrics"].get("first_fixation_time_ms"),
-                        saccades=it["metrics"].get("saccades", []),
-                        roi_metrics=it["metrics"].get("roi_metrics", []),
-                    ),
-                )
-                for it in data["items"]
-            ]
+            m = data.get("metrics", {})
+            metrics = RecordMetrics(
+                gaze_groups=m.get("gaze_groups", []),
+                fixations=m.get("fixations", []),
+                first_fixation_time_ms=m.get("first_fixation_time_ms"),
+                saccades=m.get("saccades", []),
+                roi_metrics=m.get("roi_metrics", []),
+            )
             return Record(
                 id=data["id"],
                 test_id=data["test_id"],
@@ -193,7 +182,7 @@ class LocalRecordService(RecordService):
                 started_at=data["started_at"],
                 finished_at=data["finished_at"],
                 duration_ms=data["duration_ms"],
-                items=items,
+                metrics=metrics,
                 created_at=data["created_at"],
             )
         except (json.JSONDecodeError, KeyError, OSError) as exc:

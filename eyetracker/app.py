@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication, QMainWindow, QMessageBox, QStackedWidget
 
+from eyetracker.core.fixation_offline import detect_fixations_ivt
 from eyetracker.core.gaze_points_map import _compute_velocities
 from eyetracker.core.monitor import resolve_screen
 from eyetracker.core.pipeline import EyeTracker
@@ -19,8 +20,7 @@ from eyetracker.data.record import (
     ApiRecordService,
     LocalRecordService,
     Record,
-    RecordItem,
-    RecordItemMetrics,
+    RecordMetrics,
 )
 from eyetracker.data.settings import Settings
 from eyetracker.data.test import ApiTestDao, LocalTestDao, TestData
@@ -146,6 +146,7 @@ class App:
 
         tracker = EyeTracker()
         tracker.params.data_timestep = self._settings.tracking_timestep_ms
+        tracker.smoothing_window_size = self._settings.smoothing_window_size
         self._calibration = CalibrationScreen(
             tracker=tracker,
             on_back=self._go_to_home,
@@ -167,6 +168,7 @@ class App:
 
         tracker = EyeTracker()
         tracker.params.data_timestep = self._settings.tracking_timestep_ms
+        tracker.smoothing_window_size = self._settings.smoothing_window_size
         self._calibration = CalibrationScreen(
             tracker=tracker,
             on_back=self._go_to_home,
@@ -305,53 +307,54 @@ class App:
         finished_dt = datetime.fromisoformat(finished)
         duration_ms = int((finished_dt - started_dt).total_seconds() * 1000)
 
-        items: list[RecordItem] = []
-        fixations_all = self._test_run_screen.get_fixations()
-        timed_gaze_all = self._test_run_screen.get_timed_gaze()
-        for idx, (filename, aggregator) in enumerate(self._test_run_screen.get_results()):
-            timed = timed_gaze_all[idx] if idx < len(timed_gaze_all) else []
-            aggregated = aggregator.get_aggregated()
-            groups = []
-            for i, g in enumerate(aggregated):
-                entry: dict = {"x": g.x, "y": g.y, "count": g.count}
-                if i < len(timed):
-                    entry["time_ms"] = timed[i][2]
-                groups.append(entry)
-            fixations = fixations_all[idx] if idx < len(fixations_all) else []
-            first_fix_time = next(
-                (fx.get("time_ms") for fx in fixations if fx.get("is_first")), None
-            )
-            velocities = _compute_velocities(groups)
-            raw_saccades = detect_saccades(groups, velocities)
-            saccades = [
-                {
-                    "duration_ms": s.duration_ms,
-                    "points": [
-                        {
-                            "x": groups[i]["x"],
-                            "y": groups[i]["y"],
-                            "time_ms": groups[i].get("time_ms"),
-                            "velocity": velocities[i],
-                        }
-                        for i in range(s.start_idx, s.end_idx + 1)
-                    ],
-                }
-                for s in raw_saccades
-            ]
-            roi_metrics = compute_roi_metrics(
-                self._pending_test.image_regions, filename, fixations,
-            )
-            items.append(RecordItem(
-                image_filename=filename,
-                image_index=idx,
-                metrics=RecordItemMetrics(
-                    gaze_groups=groups,
-                    fixations=fixations,
-                    first_fixation_time_ms=first_fix_time,
-                    saccades=saccades,
-                    roi_metrics=roi_metrics,
-                ),
-            ))
+        filename, aggregator = self._test_run_screen.get_results()
+        timed = self._test_run_screen.get_timed_gaze()
+
+        aggregated = aggregator.get_aggregated()
+        groups = []
+        for i, g in enumerate(aggregated):
+            entry: dict = {"x": g.x, "y": g.y, "count": g.count}
+            if i < len(timed):
+                entry["time_ms"] = timed[i][2]
+            groups.append(entry)
+
+        # Detect fixations offline using I-VT; scale normalized coords to actual screen px
+        screen_geo = self._window.screen().geometry()
+        vw, vh = float(screen_geo.width()), float(screen_geo.height())
+        scaled_pts = [
+            {"x": g["x"] * vw, "y": g["y"] * vh, "time_ms": g.get("time_ms", 0)}
+            for g in groups
+        ]
+        fixations = detect_fixations_ivt(scaled_pts)
+        for f in fixations:
+            f["center"]["x"] /= vw
+            f["center"]["y"] /= vh
+            f["radius"] /= max(vw, vh)
+            for p in f["points"]:
+                p["x"] /= vw
+                p["y"] /= vh
+
+        first_fix_time = next(
+            (fx.get("start_ms") for fx in fixations if fx.get("is_first")), None
+        )
+        velocities = _compute_velocities(groups)
+        raw_saccades = detect_saccades(groups, velocities)
+        saccades = [
+            {
+                "duration_ms": s.duration_ms,
+                "points": [
+                    {
+                        "x": groups[i]["x"],
+                        "y": groups[i]["y"],
+                        "time_ms": groups[i].get("time_ms"),
+                        "velocity": velocities[i],
+                    }
+                    for i in range(s.start_idx, s.end_idx + 1)
+                ],
+            }
+            for s in raw_saccades
+        ]
+        roi_metrics = compute_roi_metrics(self._pending_test.aoi, fixations)
 
         return Record(
             id=uuid.uuid4().hex,
@@ -360,7 +363,13 @@ class App:
             started_at=started,
             finished_at=finished,
             duration_ms=duration_ms,
-            items=items,
+            metrics=RecordMetrics(
+                gaze_groups=groups,
+                fixations=fixations,
+                first_fixation_time_ms=first_fix_time,
+                saccades=saccades,
+                roi_metrics=roi_metrics,
+            ),
             created_at=now,
         )
 

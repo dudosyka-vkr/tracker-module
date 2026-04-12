@@ -598,7 +598,7 @@ class HomeScreen(QWidget):
         """
 
         if test is not None:
-            cover_path = self._test_dao.get_cover_path(test)
+            cover_path = self._test_dao.get_image_path(test)
             if cover_path.is_file():
                 tile_w = self._last_test_tile_size
                 cover_h = tile_w - 50  # leave room for name label
@@ -1034,6 +1034,23 @@ class HomeScreen(QWidget):
         window_desc.setFont(QFont(FONT_FAMILY, 12))
         window_desc.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent;")
 
+        smoothing_label = QLabel("Размер окна сглаживания взгляда")
+        smoothing_label.setFont(QFont(FONT_FAMILY, 14))
+        smoothing_label.setStyleSheet(f"color: {TEXT_PRIMARY}; background: transparent;")
+
+        self._smoothing_window_spin = QSpinBox()
+        self._smoothing_window_spin.setRange(1, 20)
+        self._smoothing_window_spin.setSuffix(" точек")
+        self._smoothing_window_spin.setValue(self._settings.smoothing_window_size)
+        self._smoothing_window_spin.setFixedWidth(160)
+        self._smoothing_window_spin.setFont(QFont(FONT_FAMILY, 14))
+        self._smoothing_window_spin.setStyleSheet(_spin_style)
+        self._smoothing_window_spin.valueChanged.connect(self._on_smoothing_window_changed)
+
+        smoothing_desc = QLabel("Количество последних предсказаний взгляда, усредняемых для снижения дрожания")
+        smoothing_desc.setFont(QFont(FONT_FAMILY, 12))
+        smoothing_desc.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent;")
+
         admin_section = QWidget()
         admin_section.setStyleSheet("background: transparent;")
         admin_vbox = QVBoxLayout(admin_section)
@@ -1069,6 +1086,11 @@ class HomeScreen(QWidget):
         admin_vbox.addSpacing(8)
         admin_vbox.addWidget(self._fixation_window_spin)
         admin_vbox.addWidget(window_desc)
+        admin_vbox.addSpacing(16)
+        admin_vbox.addWidget(smoothing_label)
+        admin_vbox.addSpacing(8)
+        admin_vbox.addWidget(self._smoothing_window_spin)
+        admin_vbox.addWidget(smoothing_desc)
 
         self._use_api_cb = QCheckBox("Использовать удалённый сервер (API)")
         self._use_api_cb.setFont(QFont(FONT_FAMILY, 14))
@@ -1171,6 +1193,9 @@ class HomeScreen(QWidget):
 
     def _on_fixation_window_changed(self, samples: int) -> None:
         self._settings.fixation_window_size_samples = samples
+
+    def _on_smoothing_window_changed(self, size: int) -> None:
+        self._settings.smoothing_window_size = size
 
     def _on_use_api_toggled(self, checked: bool) -> None:
         self._server_url_edit.setEnabled(checked)
@@ -1575,7 +1600,7 @@ class HomeScreen(QWidget):
     def _on_test_created(self, test_id: str) -> None:
         self._remove_detail_page()
         self._select_sidebar_item("tests")
-        self._show_test_detail(test_id, FormMode.EDIT)
+        self._show_test_detail(test_id, FormMode.VIEW)
 
     def _on_import_test_chosen(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -1592,8 +1617,6 @@ class HomeScreen(QWidget):
 
         self._select_sidebar_item("tests")
         self._show_test_detail(test.id, FormMode.EDIT)
-        if self._detail_page is not None:
-            self._detail_page._auto_save_draft()
 
     # ---- Keys ----------------------------------------------------------------
 

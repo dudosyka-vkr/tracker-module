@@ -81,7 +81,7 @@ def generate_saccade_map(
 
     Args:
         image_path: Path to the source (stimulus) image.
-        saccades: List of saccade dicts as stored in ``RecordItemMetrics.saccades``.
+        saccades: List of saccade dicts as stored in ``RecordMetrics.saccades``.
                   Each dict has ``"duration_ms"`` (float | None) and ``"points"``
                   (list of ``{"x", "y", "time_ms", "velocity"}``).
         dot_radius: Radius of each punctir dot in pixels.

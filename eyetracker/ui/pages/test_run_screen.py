@@ -1,4 +1,4 @@
-"""Test run screen: sequential image display with gaze tracking."""
+"""Test run screen: single image display with gaze tracking."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from eyetracker.data.test import TestDao, TestData
 
 
 class TestRunScreen(QWidget):
-    """Fullscreen widget that shows test images and collects gaze data."""
+    """Fullscreen widget that shows the test image and collects gaze data."""
 
     def __init__(
         self,
@@ -44,19 +44,14 @@ class TestRunScreen(QWidget):
         self._fixation_k = fixation_k
         self._fixation_window_samples = fixation_window_samples
 
-        self._images: list[Path] = [
-            test_dao.get_image_path(test, fn) for fn in test.image_filenames
-        ]
-        self._aggregators: list[GazeMetricsAggregator] = [
-            GazeMetricsAggregator() for _ in self._images
-        ]
-        self._fixations_per_image: list[list[dict]] = [[] for _ in self._images]
-        self._timed_gaze_per_image: list[list[tuple[float, float, int]]] = [[] for _ in self._images]
+        self._image_path: Path = test_dao.get_image_path(test)
+        self._aggregator = GazeMetricsAggregator()
+        self._fixations: list[dict] = []
+        self._timed_gaze: list[tuple[float, float, int]] = []
         self._first_fixation_recorded = False
         self._fixation_detector: FixationDetector | None = None
         self._emotion_recognizer = FaceEmotionRecognition()
 
-        self._current_index = 0
         self._current_image: QImage | None = None
         self._started_at: str | None = None
         self._finished_at: str | None = None
@@ -70,7 +65,7 @@ class TestRunScreen(QWidget):
 
         self._image_timer = QTimer()
         self._image_timer.setInterval(image_display_duration_ms)
-        self._image_timer.timeout.connect(self._advance_image)
+        self._image_timer.timeout.connect(self._finish)
 
         self._repaint_timer = QTimer()
         self._repaint_timer.timeout.connect(self.update)
@@ -83,25 +78,21 @@ class TestRunScreen(QWidget):
     def finished_at(self) -> str | None:
         return self._finished_at
 
-    def get_results(self) -> list[tuple[str, GazeMetricsAggregator]]:
-        return list(zip(self._test.image_filenames, self._aggregators))
+    def get_results(self) -> tuple[str, GazeMetricsAggregator]:
+        return (self._test.image_filename, self._aggregator)
 
-    def get_fixations(self) -> list[list[dict]]:
-        return self._fixations_per_image
+    def get_fixations(self) -> list[dict]:
+        return self._fixations
 
-    def get_timed_gaze(self) -> list[list[tuple[float, float, int]]]:
-        return list(self._timed_gaze_per_image)
+    def get_timed_gaze(self) -> list[tuple[float, float, int]]:
+        return list(self._timed_gaze)
 
     def start(self) -> None:
-        if not self._images:
-            self._on_finish()
-            return
         self._started_at = datetime.now(timezone.utc).isoformat()
-        self._current_index = 0
         self._screen_w = self.width()
         self._screen_h = self.height()
         self._image_started_at = datetime.now(timezone.utc)
-        self._load_current_image()
+        self._current_image = QImage(str(self._image_path))
         if self._fixation_enabled:
             self._fixation_detector = FixationDetector(
                 k=self._fixation_k,
@@ -123,23 +114,11 @@ class TestRunScreen(QWidget):
         self._image_timer.stop()
         self._repaint_timer.stop()
 
-    def _load_current_image(self) -> None:
-        path = self._images[self._current_index]
-        self._current_image = QImage(str(path))
-
-    def _advance_image(self) -> None:
-        if self._fixation_detector is not None:
-            self._fixation_detector.reset()
-        self._first_fixation_recorded = False
-        self._image_started_at = datetime.now(timezone.utc)
-        self._current_index += 1
-        if self._current_index >= len(self._images):
-            self._finished_at = datetime.now(timezone.utc).isoformat()
-            self._image_timer.stop()
-            self._repaint_timer.stop()
-            self._on_finish()
-            return
-        self._load_current_image()
+    def _finish(self) -> None:
+        self._finished_at = datetime.now(timezone.utc).isoformat()
+        self._image_timer.stop()
+        self._repaint_timer.stop()
+        self._on_finish()
 
     def _on_gaze(self, gaze_data: dict | None, elapsed: float) -> None:
         if gaze_data is None:
@@ -147,22 +126,16 @@ class TestRunScreen(QWidget):
         x, y = gaze_data["x"], gaze_data["y"]
         self._gaze_x = x
         self._gaze_y = y
-        if self._current_index >= len(self._aggregators):
-            return
-        self._aggregators[self._current_index].add_point(
-            x, y, self._screen_w, self._screen_h
-        )
+        self._aggregator.add_point(x, y, self._screen_w, self._screen_h)
         if self._image_started_at is not None:
             time_ms = int(
                 (datetime.now(timezone.utc) - self._image_started_at).total_seconds() * 1000
             )
-            self._timed_gaze_per_image[self._current_index].append((x, y, time_ms))
+            self._timed_gaze.append((x, y, time_ms))
         if self._fixation_detector is not None:
             self._fixation_detector.on_gaze_point(x, y)
 
     def _on_fixation_detected(self, fixation: dict) -> None:
-        if self._current_index >= len(self._fixations_per_image):
-            return
         fixation["is_first"] = not self._first_fixation_recorded
         if not self._first_fixation_recorded:
             self._first_fixation_recorded = True
@@ -180,7 +153,7 @@ class TestRunScreen(QWidget):
             "x": fixation["center"]["x"] / sw,
             "y": fixation["center"]["y"] / sh,
         }
-        self._fixations_per_image[self._current_index].append(fixation)
+        self._fixations.append(fixation)
 
     # ---- Rendering -----------------------------------------------------------
 
@@ -199,16 +172,6 @@ class TestRunScreen(QWidget):
             x = (w - img.width()) // 2
             y = (h - img.height()) // 2
             p.drawImage(x, y, img)
-
-        total = len(self._images)
-        current = min(self._current_index + 1, total)
-        p.setPen(QColor("white"))
-        p.setFont(QFont("Helvetica", 14))
-        p.drawText(
-            QRectF(w - 220, 10, 210, 30),
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-            f"Изображение {current}/{total}",
-        )
 
         if self._show_gaze_marker:
             p.setBrush(QColor("red"))

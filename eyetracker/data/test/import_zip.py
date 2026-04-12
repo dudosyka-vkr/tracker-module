@@ -14,13 +14,13 @@ def import_test_zip(zip_path: Path, dao: TestDao) -> TestData:
     """Import a test from a ZIP produced by ``export_test_zip``.
 
     Extracts the archive to a temporary directory, reads ``test.json``,
-    creates a new test via *dao*, saves ROI regions, and returns the
+    creates a new test via *dao*, saves AOI, and returns the
     newly created :class:`TestData`.
 
     Raises:
         zipfile.BadZipFile: if *zip_path* is not a valid ZIP.
         ValueError: if ``test.json`` is missing or structurally invalid.
-        FileNotFoundError: if a referenced image file is absent in the ZIP.
+        FileNotFoundError: if the referenced image file is absent in the ZIP.
     """
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
@@ -37,40 +37,23 @@ def import_test_zip(zip_path: Path, dao: TestDao) -> TestData:
         if not name:
             raise ValueError("test.json: 'name' field is missing or empty")
 
-        cover_rel: str = meta.get("cover", "")
-        if not cover_rel:
-            raise ValueError("test.json: 'cover' field is missing")
-
-        images_meta: list[dict] = meta.get("images", [])
-        if not images_meta:
-            raise ValueError("test.json: 'images' list is empty")
+        image_rel: str = meta.get("image", "")
+        if not image_rel:
+            raise ValueError("test.json: 'image' field is missing")
 
         def _resolve(rel: str) -> Path:
             # Strip leading ./ or /
             return tmp / rel.lstrip("./").lstrip("/")
 
-        cover_path = _resolve(cover_rel)
-        if not cover_path.is_file():
-            raise FileNotFoundError(f"Cover image not found in ZIP: {cover_rel}")
+        image_path = _resolve(image_rel)
+        if not image_path.is_file():
+            raise FileNotFoundError(f"Image not found in ZIP: {image_rel}")
 
-        image_paths: list[Path] = []
-        for entry in images_meta:
-            p = _resolve(entry["path"])
-            if not p.is_file():
-                raise FileNotFoundError(f"Image not found in ZIP: {entry['path']}")
-            image_paths.append(p)
+        test = dao.create(name=name, image_src=image_path)
 
-        test = dao.create(name=name, cover_src=cover_path, image_srcs=image_paths)
-
-        # Map newly assigned filenames back to ROI regions from the JSON
-        regions: dict[str, list] = {}
-        for i, entry in enumerate(images_meta):
-            roi_list = entry.get("regions", [])
-            if roi_list and i < len(test.image_filenames):
-                regions[test.image_filenames[i]] = roi_list
-
-        if regions:
-            dao.save_regions(test.id, regions)
+        aoi = meta.get("aoi", [])
+        if aoi:
+            dao.save_aoi(test.id, aoi)
             reloaded = dao.load(test.id)
             if reloaded is not None:
                 return reloaded

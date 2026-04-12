@@ -24,12 +24,11 @@ def point_in_polygon(px: float, py: float, points: list[dict]) -> bool:
 
 
 def compute_roi_metrics(
-    regions: dict[str, list[dict]],
-    filename: str,
+    aoi: list[dict],
     fixations: list[dict],
 ) -> list[dict]:
-    """Return per-ROI hit results for one image."""
-    rois = regions.get(filename, [])
+    """Return per-AOI hit results."""
+    rois = aoi
     if not rois:
         return []
 
@@ -68,7 +67,7 @@ def compute_roi_metrics(
 _FILL_ALPHA = 0.25
 _LABEL_BG_ALPHA = 0.7
 _PAD = 4
-_FONT_SIZE = 14
+_FONT_SIZE = 42
 
 
 def _get_pil_font() -> ImageFont.FreeTypeFont | ImageFont.ImageFont:

@@ -7,8 +7,8 @@ from dataclasses import dataclass, field
 
 
 @dataclass
-class RecordItemMetrics:
-    """Gaze metrics for a single image."""
+class RecordMetrics:
+    """Gaze metrics for a test record."""
 
     gaze_groups: list[dict]
     fixations: list[dict] = field(default_factory=list)
@@ -16,15 +16,6 @@ class RecordItemMetrics:
     saccades: list[dict] = field(default_factory=list)
     roi_metrics: list[dict] = field(default_factory=list)
     # roi_metrics entries: {"name": str, "color": str, "hit": bool, "first_fixation_required": bool}
-
-
-@dataclass
-class RecordItem:
-    """One image's data within a record."""
-
-    image_filename: str
-    image_index: int
-    metrics: RecordItemMetrics
 
 
 @dataclass
@@ -37,13 +28,13 @@ class Record:
     started_at: str
     finished_at: str
     duration_ms: int
-    items: list[RecordItem]
+    metrics: RecordMetrics
     created_at: str
 
 
 @dataclass
 class RecordSummary:
-    """Record metadata without items (for list views)."""
+    """Record metadata without metrics (for list views)."""
 
     id: str
     test_id: str
@@ -117,15 +108,15 @@ class RecordService(ABC):
         ...
 
     @abstractmethod
-    def get_roi_stats(self, test_id: str) -> list[RoiStat]:
-        """Return aggregated ROI hit statistics for all records of the given test."""
+    def get_aoi_stats(self, test_id: str) -> list[RoiStat]:
+        """Return aggregated AOI hit statistics for all records of the given test."""
         ...
 
     @abstractmethod
-    def is_roi_sync_needed(self, test_id: str, image_regions: dict) -> bool:
-        """Return True if any record item for the test has stale ROI metrics.
+    def is_aoi_sync_needed(self, test_id: str, aoi: list[dict]) -> bool:
+        """Return True if any record for the test has stale AOI metrics.
 
-        ``image_regions`` is the test's current {filename: [roi, …]} mapping.
+        ``aoi`` is the test's current AOI list.
         Remote implementations may ignore it and query the server instead.
         """
         ...

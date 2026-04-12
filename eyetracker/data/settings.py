@@ -161,6 +161,16 @@ class Settings:
         self._save()
 
     @property
+    def smoothing_window_size(self) -> int:
+        """Number of recent gaze predictions averaged in the sliding-window smoother."""
+        return int(self._data.get("smoothing_window_size", 4))
+
+    @smoothing_window_size.setter
+    def smoothing_window_size(self, value: int) -> None:
+        self._data["smoothing_window_size"] = value
+        self._save()
+
+    @property
     def last_opened_test_id(self) -> str | None:
         """ID of the last opened test."""
         return self._data.get("last_opened_test_id")

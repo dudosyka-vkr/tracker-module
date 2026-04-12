@@ -627,7 +627,7 @@ class RecordsListPage(QWidget):
         self._users_label.setText(f"Уникальных пользователей: {len({s.user_login for s in self._all_summaries})}")
 
         # ── pie charts via single roi-stats request ───────────────────────────
-        roi_stats = self._record_service.get_roi_stats(self._test_id)
+        roi_stats = self._record_service.get_aoi_stats(self._test_id)
 
         while self._pie_row.count():
             item = self._pie_row.takeAt(0)
@@ -688,7 +688,7 @@ class RecordsListPage(QWidget):
         if (
             self._test_dao is not None
             and self._test is not None
-            and self._record_service.is_roi_sync_needed(self._test.id, self._test.image_regions)
+            and self._record_service.is_aoi_sync_needed(self._test.id, self._test.aoi)
         ):
             self._sync_btn.setEnabled(True)
             self._sync_btn.setText("Синхронизировать зоны интереса")
@@ -825,11 +825,12 @@ class RecordsListPage(QWidget):
 
             hit_map: dict[str, bool] = {}
             for r in summary.roi_hits:
-                raw_name = r["name"]
-                hit = bool(r.get("hit", False))
-                # index by full name
+                if isinstance(r, str):
+                    raw_name, hit = r, True
+                else:
+                    raw_name = r["name"]
+                    hit = bool(r.get("hit", False))
                 hit_map[raw_name] = hit_map.get(raw_name, False) or hit
-                # also index by base name without " (N)" suffix
                 if " (" in raw_name:
                     base = raw_name.rsplit(" (", 1)[0]
                     hit_map[base] = hit_map.get(base, False) or hit
@@ -945,12 +946,10 @@ class RecordsListPage(QWidget):
         ]
 
         per_image_headers = (
-            ["Дата и время", "Пользователь", "Изображение"]
+            ["Дата и время", "Пользователь", "Файл изображения"]
             + self._roi_names
             + metric_cols
         )
-        roi_defs_headers = ["Изображение"] + self._roi_names
-
         per_image_rows: list[list] = []
 
         for summary in self._all_summaries:
@@ -958,54 +957,41 @@ class RecordsListPage(QWidget):
             dt = format_datetime(summary.started_at)
 
             if rec:
-                for item in rec.items:
-                    img_roi_hit: dict[str, bool] = {}
-                    for roi in item.metrics.roi_metrics:
-                        img_roi_hit[roi.get("name", "")] = bool(roi.get("hit"))
+                m = rec.metrics
+                img_roi_hit: dict[str, bool] = {}
+                for roi in m.roi_metrics:
+                    img_roi_hit[roi.get("name", "")] = bool(roi.get("hit"))
 
-                    img_fix_centers: list[dict] = []
-                    img_first_fix: dict | None = None
-                    for fx in item.metrics.fixations:
-                        center = fx.get("center", {})
-                        pt = {"x": center.get("x"), "y": center.get("y")}
-                        img_fix_centers.append(pt)
-                        if fx.get("is_first") and img_first_fix is None:
-                            img_first_fix = pt
+                img_fix_centers: list[dict] = []
+                img_first_fix: dict | None = None
+                for fx in m.fixations:
+                    center = fx.get("center", {})
+                    pt = {"x": center.get("x"), "y": center.get("y")}
+                    img_fix_centers.append(pt)
+                    if fx.get("is_first") and img_first_fix is None:
+                        img_first_fix = pt
 
-                    img_sac_endpoints: list[dict] = []
-                    for sc in item.metrics.saccades:
-                        pts = sc.get("points", [])
-                        if pts:
-                            img_sac_endpoints.append({
-                                "start": {"x": pts[0]["x"], "y": pts[0]["y"]},
-                                "end": {"x": pts[-1]["x"], "y": pts[-1]["y"]},
-                            })
+                img_sac_endpoints: list[dict] = []
+                for sc in m.saccades:
+                    pts = sc.get("points", [])
+                    if pts:
+                        img_sac_endpoints.append({
+                            "start": {"x": pts[0]["x"], "y": pts[0]["y"]},
+                            "end": {"x": pts[-1]["x"], "y": pts[-1]["y"]},
+                        })
 
-                    img_row: list = [dt, summary.user_login, item.image_filename]
-                    for roi_name in self._roi_names:
-                        img_row.append("✓" if img_roi_hit.get(roi_name) else "")
-                    img_row.extend([
-                        len(item.metrics.fixations),
-                        len(item.metrics.saccades),
-                        json.dumps(img_fix_centers, ensure_ascii=False),
-                        json.dumps(img_sac_endpoints, ensure_ascii=False),
-                        json.dumps(img_first_fix, ensure_ascii=False) if img_first_fix is not None else "",
-                    ])
-                    per_image_rows.append(img_row)
-
-        # ── ROI definitions from test settings ────────────────────────────────
-        roi_defs_rows: list[list] = []
-        if self._test is not None:
-            for filename in self._test.image_filenames:
-                defined = {
-                    r["name"]
-                    for r in self._test.image_regions.get(filename, [])
-                    if "name" in r
-                }
-                row: list = [filename]
+                image_filename = self._test.image_filename if self._test else ""
+                img_row: list = [dt, summary.user_login, image_filename]
                 for roi_name in self._roi_names:
-                    row.append("TRUE" if roi_name in defined else "FALSE")
-                roi_defs_rows.append(row)
+                    img_row.append("✓" if img_roi_hit.get(roi_name) else "")
+                img_row.extend([
+                    len(m.fixations),
+                    len(m.saccades),
+                    json.dumps(img_fix_centers, ensure_ascii=False),
+                    json.dumps(img_sac_endpoints, ensure_ascii=False),
+                    json.dumps(img_first_fix, ensure_ascii=False) if img_first_fix is not None else "",
+                ])
+                per_image_rows.append(img_row)
 
         def _csv_bytes(headers: list, rows: list[list]) -> bytes:
             buf = io.StringIO()
@@ -1014,25 +1000,9 @@ class RecordsListPage(QWidget):
             writer.writerows(rows)
             return ("\ufeff" + buf.getvalue()).encode("utf-8")
 
-        # ── README from template file ─────────────────────────────────────────
-        roi_list = ", ".join(f"`{r}`" for r in self._roi_names) or "_(нет зон интереса)_"
-        readme_template_path = _RESOURCES_DIR / "csv_export_readme.md"
-        try:
-            readme_template = readme_template_path.read_text(encoding="utf-8")
-        except OSError:
-            readme_template = ""
-        readme = readme_template.format(
-            test_name=self._test_name,
-            roi_list=roi_list,
-            per_image_csv=f"{base}_per_image.csv",
-            roi_defs_csv=f"{base}_roi_definitions.csv",
-        )
-
         try:
             with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-                zf.writestr("README.md", readme.encode("utf-8"))
-                zf.writestr(f"{base}_per_image.csv", _csv_bytes(per_image_headers, per_image_rows))
-                zf.writestr(f"{base}_roi_definitions.csv", _csv_bytes(roi_defs_headers, roi_defs_rows))
+                zf.writestr(f"{base}_records.csv", _csv_bytes(per_image_headers, per_image_rows))
         except OSError as exc:
             msg = QMessageBox(self)
             msg.setWindowTitle("Ошибка экспорта")
@@ -1048,7 +1018,7 @@ class RecordsListPage(QWidget):
 
         def _run() -> None:
             try:
-                self._test_dao.sync_roi_metrics(self._test_id, self._record_service)
+                self._test_dao.sync_aoi_metrics(self._test_id, self._record_service)
                 QTimer.singleShot(0, self._on_sync_done)
             except Exception as exc:
                 msg = str(exc)

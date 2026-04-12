@@ -5,9 +5,8 @@ from __future__ import annotations
 from eyetracker.data.http_client import ApiError, HttpClient
 from eyetracker.data.record.service import (
     Record,
-    RecordItem,
-    RecordItemMetrics,
     RecordListResult,
+    RecordMetrics,
     RecordQuery,
     RecordService,
     RecordSummary,
@@ -20,60 +19,26 @@ class ApiRecordService(RecordService):
 
     def __init__(self, client: HttpClient) -> None:
         self._client = client
-        self._test_cache: dict[str, dict] = {}  # test_id -> cached test response
 
     # -- public API -----------------------------------------------------------
 
     def save(self, record: Record) -> None:
-        test_resp = self._client.get(f"/tests/{record.test_id}")
-        ids = _image_ids(test_resp)
-
-        items = []
-        for item in record.items:
-            index = int(item.image_filename)
-            items.append({
-                "imageId": ids[index],
-                "metrics": {
-                    "gazeGroups": item.metrics.gaze_groups,
-                    "fixations": item.metrics.fixations,
-                    "firstFixationTimeMs": item.metrics.first_fixation_time_ms,
-                    "saccades": item.metrics.saccades,
-                    "roiMetrics": item.metrics.roi_metrics,
-                },
-            })
-
         self._client.post("/records", json={
             "testId": int(record.test_id),
             "startedAt": record.started_at,
             "finishedAt": record.finished_at,
             "durationMs": record.duration_ms,
-            "items": items,
+            "metrics": _serialize_metrics(record.metrics),
         })
 
     def save_unauthorized(self, record: Record, token: str, login: str) -> None:
-        test_resp = self._client.get(f"/tests/by-token/{token}")
-        ids = _image_ids(test_resp)
-
-        items = []
-        for item in record.items:
-            index = int(item.image_filename)
-            items.append({
-                "imageId": ids[index],
-                "metrics": {
-                    "gazeGroups": item.metrics.gaze_groups,
-                    "fixations": item.metrics.fixations,
-                    "firstFixationTimeMs": item.metrics.first_fixation_time_ms,
-                    "saccades": item.metrics.saccades,
-                    "roiMetrics": item.metrics.roi_metrics,
-                },
-            })
         self._client.post("/records/unauthorized", json={
             "token": token,
             "login": login,
             "startedAt": record.started_at,
             "finishedAt": record.finished_at,
             "durationMs": record.duration_ms,
-            "items": items,
+            "metrics": _serialize_metrics(record.metrics),
         })
 
     def query(self, params: RecordQuery) -> RecordListResult:
@@ -96,31 +61,14 @@ class ApiRecordService(RecordService):
         except ApiError:
             return None
 
-        test_id_key = str(resp["testId"])
-        if test_id_key not in self._test_cache:
-            self._test_cache[test_id_key] = self._client.get(f"/tests/{test_id_key}")
-        test_resp = self._test_cache[test_id_key]
-        ids = _image_ids(test_resp)
-
-        items = []
-        for item_data in resp["items"]:
-            image_id = item_data["imageId"]
-            try:
-                image_index = ids.index(image_id)
-            except ValueError:
-                image_index = 0
-            m = item_data.get("metrics", {})
-            items.append(RecordItem(
-                image_filename=str(image_index),
-                image_index=image_index,
-                metrics=RecordItemMetrics(
-                    gaze_groups=m.get("gazeGroups", []),
-                    fixations=m.get("fixations", []),
-                    first_fixation_time_ms=m.get("firstFixationTimeMs"),
-                    saccades=m.get("saccades", []),
-                    roi_metrics=m.get("roiMetrics", []),
-                ),
-            ))
+        m = resp.get("metrics", {})
+        metrics = RecordMetrics(
+            gaze_groups=m.get("gazeGroups", []),
+            fixations=m.get("fixations", []),
+            first_fixation_time_ms=m.get("firstFixationTimeMs"),
+            saccades=m.get("saccades", []),
+            roi_metrics=m.get("aoiMetrics", m.get("roiMetrics", [])),
+        )
 
         return Record(
             id=str(resp["id"]),
@@ -129,13 +77,13 @@ class ApiRecordService(RecordService):
             started_at=resp["startedAt"],
             finished_at=resp["finishedAt"],
             duration_ms=resp["durationMs"],
-            items=items,
+            metrics=metrics,
             created_at=resp["createdAt"],
         )
 
-    def get_roi_stats(self, test_id: str) -> list[RoiStat]:
+    def get_aoi_stats(self, test_id: str) -> list[RoiStat]:
         try:
-            resp = self._client.get(f"/tests/{test_id}/roi-stats")
+            resp = self._client.get(f"/tests/{test_id}/aoi-stats")
         except Exception:
             return []
         return [
@@ -146,12 +94,12 @@ class ApiRecordService(RecordService):
                 total=r["total"],
                 first_fixation_required=r.get("firstFixationRequired", False),
             )
-            for r in resp.get("rois", [])
+            for r in resp.get("aois", [])
         ]
 
-    def is_roi_sync_needed(self, test_id: str, image_regions: dict) -> bool:
+    def is_aoi_sync_needed(self, test_id: str, aoi: list[dict]) -> bool:
         try:
-            resp = self._client.get("/records/roi-sync", params=[("testId", int(test_id))])
+            resp = self._client.get("/records/aoi-sync", params=[("testId", int(test_id))])
             return not resp.get("synced", True)
         except Exception:
             return False
@@ -184,16 +132,21 @@ class ApiRecordService(RecordService):
             result.append(("to", params.date_to))
         if params.roi_hits:
             for name, hit in params.roi_hits.items():
-                result.append((f"roi.{name}", str(hit).lower()))
+                result.append((f"aoi.{name}", str(hit).lower()))
         result.append(("page", params.page))
         result.append(("pageSize", params.page_size))
 
         return result
 
 
-def _image_ids(test_resp: dict) -> list[int]:
-    images = sorted(test_resp.get("images", []), key=lambda img: img.get("sortOrder", 0))
-    return [img["id"] for img in images]
+def _serialize_metrics(metrics: RecordMetrics) -> dict:
+    return {
+        "gazeGroups": metrics.gaze_groups,
+        "fixations": metrics.fixations,
+        "firstFixationTimeMs": metrics.first_fixation_time_ms,
+        "saccades": metrics.saccades,
+        "roiMetrics": metrics.roi_metrics,
+    }
 
 
 def _parse_summary(item: dict) -> RecordSummary:
@@ -205,5 +158,5 @@ def _parse_summary(item: dict) -> RecordSummary:
         finished_at=item["finishedAt"],
         duration_ms=item["durationMs"],
         created_at=item["createdAt"],
-        roi_hits=item.get("roiHits", []),
+        roi_hits=item.get("aoiHits", item.get("roiHits", [])),
     )

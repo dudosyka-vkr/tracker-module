@@ -3,8 +3,7 @@
 from eyetracker.data.record import (
     LocalRecordService,
     Record,
-    RecordItem,
-    RecordItemMetrics,
+    RecordMetrics,
     RecordQuery,
 )
 
@@ -23,15 +22,9 @@ def _make_record(
         started_at=started_at,
         finished_at="2025-01-01T00:00:10Z",
         duration_ms=10000,
-        items=[
-            RecordItem(
-                image_filename="img1.png",
-                image_index=0,
-                metrics=RecordItemMetrics(
-                    gaze_groups=[{"x": 0.5, "y": 0.5, "count": 10}]
-                ),
-            ),
-        ],
+        metrics=RecordMetrics(
+            gaze_groups=[{"x": 0.5, "y": 0.5, "count": 10}],
+        ),
         created_at=created_at,
     )
 
@@ -49,9 +42,7 @@ def test_save_and_load_roundtrip(tmp_path):
     assert loaded.started_at == "2025-01-01T00:00:00Z"
     assert loaded.finished_at == "2025-01-01T00:00:10Z"
     assert loaded.duration_ms == 10000
-    assert len(loaded.items) == 1
-    assert loaded.items[0].image_filename == "img1.png"
-    assert loaded.items[0].metrics.gaze_groups == [{"x": 0.5, "y": 0.5, "count": 10}]
+    assert loaded.metrics.gaze_groups == [{"x": 0.5, "y": 0.5, "count": 10}]
 
 
 def test_query_returns_summaries(tmp_path):
@@ -63,7 +54,6 @@ def test_query_returns_summaries(tmp_path):
     summary = result.items[0]
     assert summary.id == "r1"
     assert summary.user_login == "local"
-    assert not hasattr(summary, "items") or not isinstance(getattr(summary, "items", None), list)
 
 
 def test_query_filters_by_test_id(tmp_path):

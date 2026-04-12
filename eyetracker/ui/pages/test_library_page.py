@@ -182,7 +182,7 @@ class TestLibraryPage(QWidget):
         cover_label.setStyleSheet(f"background-color: {BG_SIDEBAR}; border-radius: {CORNER_RADIUS - 2}px;")
         cover_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
 
-        cover_path = self._dao.get_cover_path(test)
+        cover_path = self._dao.get_image_path(test)
         if cover_path.is_file():
             pm = QPixmap(str(cover_path)).scaled(
                 TILE_W - 8, TILE_H - 8,
