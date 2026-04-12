@@ -106,7 +106,8 @@ class HttpClient:
     def _check(self, resp: requests.Response) -> None:
         if not resp.ok:
             try:
-                msg = resp.json().get("message", resp.text)
+                body = resp.json()
+                msg = body.get("message") or body.get("error") or resp.text
             except Exception:
                 msg = resp.text
             logger.info("  -> %s %s", resp.status_code, msg)

@@ -22,8 +22,11 @@ import threading
 
 logger = logging.getLogger(__name__)
 
+import cv2
+import numpy as np
+
 from PyQt6.QtCore import QDateTime, Qt, QRect, QTimer
-from PyQt6.QtGui import QBrush, QColor, QFont, QPainter, QPen
+from PyQt6.QtGui import QBrush, QColor, QFont, QFontMetrics, QImage, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QComboBox,
     QDateTimeEdit,
@@ -34,6 +37,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -66,23 +70,28 @@ _ROI_COLORS = [
 class _PieChartWidget(QWidget):
     """Simple pie chart for a single ROI's hit/miss ratio."""
 
-    def __init__(self, roi_name: str, hits: int, total: int, color: str, first_fixation_required: bool = False, parent=None):
+    def __init__(self, roi_name: str, hits: int, total: int, color: str, first_fixation_required: bool = False, show_name: bool = True, parent=None):
         super().__init__(parent)
         self._roi_name = roi_name
         self._hits = hits
         self._total = total
         self._color = color
         self._first_fixation_required = first_fixation_required
-        self.setFixedSize(160, 210)
+        self._show_name = show_name
+        self.setMinimumSize(160, 200)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         w = self.width()
-        chart_size = 110
+        h = self.height()
+        legend_h = 50
+        name_h = 44 if self._show_name else 0
+        chart_size = max(60, min(w - 20, h - 16 - legend_h - name_h))
         x = (w - chart_size) // 2
-        y = 8
+        y = max(8, (h - chart_size - legend_h - name_h) // 2)
         rect = QRect(x, y, chart_size, chart_size)
 
         if self._total == 0:
@@ -102,40 +111,280 @@ class _PieChartWidget(QWidget):
             painter.setBrush(QBrush(QColor("#3a3a3a")))
             painter.drawPie(rect, 90 * 16 - hit_angle, -miss_angle)
 
-        # legend dots + text
+        # legend dots + text — centered under the pie
         legend_y = y + chart_size + 10
         dot_r = 7
+        font = QFont(FONT_FAMILY, 11)
+        painter.setFont(font)
+        pct = int(round(self._hits / self._total * 100)) if self._total else 0
+        fm = QFontMetrics(font)
+        text1 = f"Попадания: {pct}%"
+        text2 = f"Промахи: {100 - pct}%"
+        row_w1 = dot_r + 6 + fm.horizontalAdvance(text1)
+        row_w2 = dot_r + 6 + fm.horizontalAdvance(text2)
+        lx1 = x + (chart_size - row_w1) // 2
+        lx2 = x + (chart_size - row_w2) // 2
 
         painter.setBrush(QBrush(QColor(self._color)))
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawEllipse(8, legend_y + 3, dot_r, dot_r)
+        painter.drawEllipse(lx1, legend_y + 3, dot_r, dot_r)
         painter.setPen(QPen(QColor(TEXT_PRIMARY)))
-        painter.setFont(QFont(FONT_FAMILY, 11))
-        pct = int(round(self._hits / self._total * 100)) if self._total else 0
-        painter.drawText(8 + dot_r + 6, legend_y, w - 8 - dot_r - 6, 20, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, f"Попадания: {pct}%")
+        painter.drawText(lx1 + dot_r + 6, legend_y, fm.horizontalAdvance(text1) + 4, 20, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, text1)
 
-        legend_y2 = legend_y + 20
+        legend_y2 = legend_y + 22
         painter.setBrush(QBrush(QColor("#3a3a3a")))
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawEllipse(8, legend_y2 + 3, dot_r, dot_r)
+        painter.drawEllipse(lx2, legend_y2 + 3, dot_r, dot_r)
         painter.setPen(QPen(QColor(TEXT_SECONDARY)))
-        painter.drawText(8 + dot_r + 6, legend_y2, w - 8 - dot_r - 6, 20, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, f"Промахи: {100 - pct}%")
+        painter.drawText(lx2 + dot_r + 6, legend_y2, fm.horizontalAdvance(text2) + 4, 20, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, text2)
 
-        # ROI name at bottom
-        name_y = legend_y2 + 24
-        painter.setPen(QPen(QColor(TEXT_PRIMARY)))
-        painter.setFont(QFont(FONT_FAMILY, 11, QFont.Weight.Bold))
-        painter.drawText(0, name_y, w, 20, Qt.AlignmentFlag.AlignCenter, self._roi_name)
+        if self._show_name:
+            # ROI name at bottom
+            name_y = legend_y2 + 24
+            painter.setPen(QPen(QColor(TEXT_PRIMARY)))
+            painter.setFont(QFont(FONT_FAMILY, 11, QFont.Weight.Bold))
+            painter.drawText(0, name_y, w, 20, Qt.AlignmentFlag.AlignCenter, self._roi_name)
 
-        if self._first_fixation_required:
-            note_y = name_y + 20
-            painter.setPen(QPen(QColor("#ff9f0a")))
-            painter.setFont(QFont(FONT_FAMILY, 9))
-            painter.drawText(0, note_y, w, 16, Qt.AlignmentFlag.AlignCenter, "★ только первая фиксация")
+            if self._first_fixation_required:
+                note_y = name_y + 20
+                painter.setPen(QPen(QColor("#ff9f0a")))
+                painter.setFont(QFont(FONT_FAMILY, 9))
+                painter.drawText(0, note_y, w, 16, Qt.AlignmentFlag.AlignCenter, "★ только первая фиксация")
 
 
+class _HistogramWidget(QWidget):
+    """Bar chart for first-fixation time distribution across 500 ms bins."""
+
+    _BAR_TOP_MARGIN = 8
+    _BAR_BOTTOM_MARGIN = 20  # space for x-axis labels
+    _BAR_SIDE_MARGIN = 6
+
+    _MIN_MAX_BIN_MS = 5000   # always show at least up to 5 s
+    _BIN_STEP_MS = 500
+
+    def __init__(self, histogram: list, color: str, parent=None):
+        super().__init__(parent)
+        self._histogram = self._pad_to_min(histogram)
+        self._color = color
+        self.setMinimumSize(220, 120)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+    @classmethod
+    def _pad_to_min(cls, histogram: list) -> list:
+        """Ensure zero-count bins exist from 0 ms up to _MIN_MAX_BIN_MS."""
+        existing = {b["binStartMs"] for b in histogram}
+        result = list(histogram)
+        ms = 0
+        while ms <= cls._MIN_MAX_BIN_MS:
+            if ms not in existing:
+                result.append({"binStartMs": ms, "count": 0})
+            ms += cls._BIN_STEP_MS
+        result.sort(key=lambda b: b["binStartMs"])
+        return result
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        w = self.width()
+        h = self.height()
+        bars = len(self._histogram)
+        max_count = max((b["count"] for b in self._histogram), default=1) or 1
+
+        chart_h = h - self._BAR_TOP_MARGIN - self._BAR_BOTTOM_MARGIN
+        chart_w = w - 2 * self._BAR_SIDE_MARGIN
+        bar_w = max(2, chart_w // bars - 2)
+        spacing = (chart_w - bar_w * bars) // max(bars - 1, 1) if bars > 1 else 0
+
+        bar_color = QColor(self._color)
+        bar_color.setAlpha(200)
+        painter.setPen(Qt.PenStyle.NoPen)
+
+        for i, bin_ in enumerate(self._histogram):
+            count = bin_["count"]
+            bh = int(count / max_count * chart_h) if count > 0 else 0
+            bx = self._BAR_SIDE_MARGIN + i * (bar_w + spacing)
+            by = self._BAR_TOP_MARGIN + chart_h - bh
+            painter.setBrush(QBrush(bar_color))
+            painter.drawRoundedRect(bx, by, bar_w, bh, 2, 2)
+
+        # x-axis labels: show every bin at 0.5s step
+        painter.setPen(QPen(QColor(TEXT_SECONDARY)))
+        painter.setFont(QFont(FONT_FAMILY, 10))
+        label_y = self._BAR_TOP_MARGIN + chart_h + 2
+        for i, bin_ in enumerate(self._histogram):
+            sec = bin_["binStartMs"] // 1000
+            ms_rem = bin_["binStartMs"] % 1000
+            label = f"{sec}.{ms_rem // 100}s" if ms_rem else f"{sec}s"
+            bx = self._BAR_SIDE_MARGIN + i * (bar_w + spacing)
+            painter.drawText(bx - 4, label_y, bar_w + 8, 14,
+                             Qt.AlignmentFlag.AlignCenter, label)
 
 
+class _TgeHistogramWidget(QWidget):
+    """Bar chart showing TGE distribution across records (bin width = 0.1)."""
+
+    _BAR_TOP_MARGIN = 8
+    _BAR_BOTTOM_MARGIN = 20
+    _BAR_SIDE_MARGIN = 6
+
+    _MIN_MAX_BIN = 1.0   # always show at least up to 1.0
+
+    def __init__(self, histogram: list, parent=None):
+        super().__init__(parent)
+        self._histogram = self._pad_to_min(histogram)
+        self.setMinimumSize(220, 120)
+        self.setFixedHeight(160)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    @classmethod
+    def _pad_to_min(cls, histogram: list) -> list:
+        """Ensure bins exist at least up to _MIN_MAX_BIN, adding zeros as needed."""
+        current_max = max((b["binStart"] for b in histogram), default=-1.0)
+        result = list(histogram)
+        existing = {round(b["binStart"], 1) for b in result}
+        target = cls._MIN_MAX_BIN
+        step = 0.1
+        val = round(current_max + step, 1) if current_max >= 0 else 0.0
+        while val <= target + 1e-9:
+            key = round(val, 1)
+            if key not in existing:
+                result.append({"binStart": key, "count": 0})
+                existing.add(key)
+            val = round(val + step, 1)
+        result.sort(key=lambda b: b["binStart"])
+        return result
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        w = self.width()
+        h = self.height()
+        bars = len(self._histogram)
+        if bars == 0:
+            return
+
+        max_count = max((b["count"] for b in self._histogram), default=1) or 1
+        chart_h = h - self._BAR_TOP_MARGIN - self._BAR_BOTTOM_MARGIN
+        chart_w = w - 2 * self._BAR_SIDE_MARGIN
+        bar_w = max(2, chart_w // bars - 2)
+        spacing = (chart_w - bar_w * bars) // max(bars - 1, 1) if bars > 1 else 0
+
+        bar_color = QColor(BUTTON_BG)
+        bar_color.setAlpha(200)
+        painter.setPen(Qt.PenStyle.NoPen)
+
+        for i, bin_ in enumerate(self._histogram):
+            count = bin_["count"]
+            bh = int(count / max_count * chart_h) if count > 0 else 0
+            bx = self._BAR_SIDE_MARGIN + i * (bar_w + spacing)
+            by = self._BAR_TOP_MARGIN + chart_h - bh
+            painter.setBrush(QBrush(bar_color))
+            painter.drawRoundedRect(bx, by, bar_w, bh, 2, 2)
+
+        # X-axis labels at every 0.1 step.
+        painter.setPen(QPen(QColor(TEXT_SECONDARY)))
+        painter.setFont(QFont(FONT_FAMILY, 10))
+        label_y = self._BAR_TOP_MARGIN + chart_h + 2
+        for i, bin_ in enumerate(self._histogram):
+            label = f"{bin_['binStart']:.1f}"
+            bx = self._BAR_SIDE_MARGIN + i * (bar_w + spacing)
+            painter.drawText(bx - 4, label_y, bar_w + 8, 14,
+                             Qt.AlignmentFlag.AlignCenter, label)
+
+
+class _AoiPreviewWidget(QWidget):
+    """Square thumbnail: crops image to AOI bounding box, scales to widget size."""
+
+    _SIZE = 200          # fixed widget size (px)
+    _RENDER_SIZE = 600   # internal render resolution (square)
+
+    def __init__(self, image_path: Path | None, points: list, color: str, parent=None):
+        super().__init__(parent)
+        self._pixmap: QPixmap | None = None
+        self.setFixedSize(self._SIZE, self._SIZE)
+        if not points:
+            return
+        try:
+            self._pixmap = self._build_pixmap(image_path, points, color)
+        except Exception:
+            pass
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        if self._pixmap is None:
+            painter.fillRect(self.rect(), QColor("#2c2c2e"))
+            return
+        # Source and widget are both square — scale to fill exactly, no clipping.
+        scaled = self._pixmap.scaled(
+            self.size(),
+            Qt.AspectRatioMode.IgnoreAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        painter.drawPixmap(0, 0, scaled)
+
+    def _build_pixmap(self, image_path, points, color) -> QPixmap | None:
+        xs = [p["x"] for p in points]
+        ys = [p["y"] for p in points]
+        pad = 0.06
+
+        s = color.lstrip("#")
+        try:
+            r, g, b = int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16)
+        except Exception:
+            r, g, b = 0, 220, 100
+        bgr = (b, g, r)
+
+        sz = self._RENDER_SIZE
+        canvas = np.full((sz, sz, 3), (44, 44, 46), dtype=np.uint8)
+        # Pixel-space crop bounds for polygon mapping (normalized fallback).
+        iw_f, ih_f = 1.0, 1.0
+        crop_x0, crop_y0, crop_side = 0.0, 0.0, 1.0
+
+        if image_path is not None:
+            img = cv2.imread(str(image_path))
+            if img is not None:
+                ih_px, iw_px = img.shape[:2]
+                iw_f, ih_f = float(iw_px), float(ih_px)
+
+                # Bounding box in pixels with padding.
+                bx0 = int((min(xs) - pad) * iw_px)
+                by0 = int((min(ys) - pad) * ih_px)
+                bx1 = int((max(xs) + pad) * iw_px)
+                by1 = int((max(ys) + pad) * ih_px)
+
+                # Expand to a square in pixel space from center.
+                cx_p = (bx0 + bx1) // 2
+                cy_p = (by0 + by1) // 2
+                half_p = max(bx1 - bx0, by1 - by0) // 2
+
+                x0p = max(0, cx_p - half_p)
+                y0p = max(0, cy_p - half_p)
+                x1p = min(iw_px, cx_p + half_p)
+                y1p = min(ih_px, cy_p + half_p)
+
+                crop = img[y0p:y1p, x0p:x1p]
+                if crop.size > 0:
+                    crop_x0, crop_y0 = float(x0p), float(y0p)
+                    crop_side = float(max(x1p - x0p, y1p - y0p)) or 1.0
+                    canvas = cv2.resize(crop, (sz, sz), interpolation=cv2.INTER_AREA)
+
+        pts_px = np.array([
+            (int((p["x"] * iw_f - crop_x0) / crop_side * sz),
+             int((p["y"] * ih_f - crop_y0) / crop_side * sz))
+            for p in points
+        ], dtype=np.int32)
+
+        overlay = canvas.copy()
+        cv2.fillPoly(overlay, [pts_px], bgr)
+        cv2.addWeighted(overlay, 0.3, canvas, 0.7, 0, canvas)
+        cv2.polylines(canvas, [pts_px], True, bgr, 3, cv2.LINE_AA)
+
+        rgb = cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB)
+        qimg = QImage(rgb.data, sz, sz, sz * 3, QImage.Format.Format_RGB888)
+        return QPixmap.fromImage(qimg)
 
 
 class RecordsListPage(QWidget):
@@ -150,6 +399,7 @@ class RecordsListPage(QWidget):
         on_back: Callable[[], None],
         test_dao: TestDao | None = None,
         test: TestData | None = None,
+        always_show_sync_aoi: bool = False,
     ):
         super().__init__()
         self._record_service = record_service
@@ -159,6 +409,7 @@ class RecordsListPage(QWidget):
         self._on_back = on_back
         self._test_dao = test_dao
         self._test = test
+        self._always_show_sync_aoi = always_show_sync_aoi
         self._all_summaries: list[RecordSummary] = []
         self._filtered_summaries: list[RecordSummary] = []
         self._roi_names: list[str] = []
@@ -316,19 +567,36 @@ class RecordsListPage(QWidget):
 
         stats_layout.addLayout(summary_row)
 
-        # pie charts row
+        # TGE histogram section (shown only when data is available)
+        self._tge_hist_container = QWidget()
+        self._tge_hist_container.setStyleSheet("background: transparent;")
+        tge_outer = QVBoxLayout(self._tge_hist_container)
+        tge_outer.setContentsMargins(0, 0, 0, 0)
+        tge_outer.setSpacing(6)
+        tge_heading = QLabel("Распределение энтропии переходов (TGE)")
+        tge_heading.setFont(QFont(FONT_FAMILY, 14))
+        tge_heading.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent;")
+        tge_outer.addWidget(tge_heading)
+        self._tge_hist_layout = QVBoxLayout()
+        self._tge_hist_layout.setContentsMargins(0, 0, 0, 0)
+        tge_outer.addLayout(self._tge_hist_layout)
+        self._tge_hist_container.hide()
+        stats_layout.addWidget(self._tge_hist_container)
+
+        # AOI stats header
         pie_header = QLabel("Статистика попаданий по зонам интереса")
         pie_header.setFont(QFont(FONT_FAMILY, 14))
         pie_header.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent;")
         self._pie_header = pie_header
         stats_layout.addWidget(pie_header)
 
-        self._pie_row = QHBoxLayout()
-        self._pie_row.setSpacing(16)
-        self._pie_row.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        # Vertical stack of per-AOI cards
+        self._aoi_cards_layout = QVBoxLayout()
+        self._aoi_cards_layout.setSpacing(28)
+        self._aoi_cards_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self._pie_container = QWidget()
         self._pie_container.setStyleSheet("background: transparent;")
-        self._pie_container.setLayout(self._pie_row)
+        self._pie_container.setLayout(self._aoi_cards_layout)
         stats_layout.addWidget(self._pie_container)
 
         self._no_roi_label = QLabel("Нет данных по зонам интереса")
@@ -626,13 +894,39 @@ class RecordsListPage(QWidget):
         self._passes_label.setText(f"Прохождений: {len(self._all_summaries)}")
         self._users_label.setText(f"Уникальных пользователей: {len({s.user_login for s in self._all_summaries})}")
 
-        # ── pie charts via single roi-stats request ───────────────────────────
-        roi_stats = self._record_service.get_aoi_stats(self._test_id)
+        # ── AOI + TGE stats via single request ───────────────────────────────
+        aoi_stats_result = self._record_service.get_aoi_stats(self._test_id)
+        roi_stats = aoi_stats_result.aois
 
-        while self._pie_row.count():
-            item = self._pie_row.takeAt(0)
+        # TGE histogram widget
+        self._tge_hist_container.setVisible(bool(aoi_stats_result.tge_histogram))
+        if aoi_stats_result.tge_histogram:
+            while self._tge_hist_layout.count():
+                item = self._tge_hist_layout.takeAt(0)
+                if item.widget():
+                    item.widget().deleteLater()
+            self._tge_hist_layout.addWidget(
+                _TgeHistogramWidget(aoi_stats_result.tge_histogram)
+            )
+
+        while self._aoi_cards_layout.count():
+            item = self._aoi_cards_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
+
+        # Resolve image path once for all AOI previews
+        image_path: Path | None = None
+        if self._test_dao is not None and self._test is not None:
+            try:
+                image_path = self._test_dao.get_image_path(self._test)
+            except Exception:
+                pass
+
+        # Build AOI name → polygon points lookup
+        aoi_points: dict[str, list] = {}
+        if self._test is not None:
+            for aoi_entry in self._test.aoi:
+                aoi_points[aoi_entry.get("name", "")] = aoi_entry.get("points", [])
 
         if roi_stats:
             self._pie_header.show()
@@ -640,8 +934,77 @@ class RecordsListPage(QWidget):
             self._no_roi_label.hide()
             for idx, stat in enumerate(roi_stats):
                 color = stat.color or _ROI_COLORS[idx % len(_ROI_COLORS)]
-                chart = _PieChartWidget(stat.name, stat.hits, stat.total, color, first_fixation_required=stat.first_fixation_required)
-                self._pie_row.addWidget(chart)
+
+                # Outer wrapper: name label above top-right, then the card
+                wrapper = QWidget()
+                wrapper.setStyleSheet("background: transparent;")
+                wrapper_layout = QVBoxLayout(wrapper)
+                wrapper_layout.setContentsMargins(0, 0, 0, 0)
+                wrapper_layout.setSpacing(0)
+
+                name_row = QHBoxLayout()
+                name_row.setContentsMargins(4, 0, 0, 4)
+                name_lbl = QLabel(stat.name)
+                name_lbl.setFont(QFont(FONT_FAMILY, 13, QFont.Weight.Bold))
+                name_lbl.setStyleSheet(f"color: {TEXT_PRIMARY}; background: transparent;")
+                name_row.addWidget(name_lbl)
+                if stat.first_fixation_required:
+                    req_lbl = QLabel("★")
+                    req_lbl.setFont(QFont(FONT_FAMILY, 11))
+                    req_lbl.setStyleSheet("color: #ff9f0a; background: transparent;")
+                    req_lbl.setToolTip("Только первая фиксация")
+                    name_row.addWidget(req_lbl)
+                name_row.addStretch()
+                wrapper_layout.addLayout(name_row)
+
+                card = QWidget()
+                card.setStyleSheet(
+                    f"background-color: {CARD_BG}; border-radius: {CORNER_RADIUS}px;"
+                )
+                wrapper_layout.addWidget(card)
+
+                row = QHBoxLayout(card)
+                row.setContentsMargins(16, 16, 16, 16)
+                row.setSpacing(20)
+
+                # Left: AOI preview image only
+                left = QWidget()
+                left.setStyleSheet("background: transparent;")
+                left_layout = QVBoxLayout(left)
+                left_layout.setContentsMargins(0, 0, 0, 0)
+                left_layout.setSpacing(0)
+                left.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+
+                preview = _AoiPreviewWidget(image_path, aoi_points.get(stat.name, []), color)
+                left_layout.addWidget(preview)
+
+                row.addWidget(left)
+
+                # Middle: pie chart (no name)
+                chart = _PieChartWidget(
+                    stat.name, stat.hits, stat.total, color,
+                    first_fixation_required=False, show_name=False,
+                )
+                row.addWidget(chart)
+
+                # Right: histogram (always shown; empty state handled inside widget)
+                right = QWidget()
+                right.setStyleSheet("background: transparent;")
+                right_layout = QVBoxLayout(right)
+                right_layout.setContentsMargins(0, 0, 0, 0)
+                right_layout.setSpacing(6)
+                right_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+                hist_lbl = QLabel("Время первой фиксации")
+                hist_lbl.setFont(QFont(FONT_FAMILY, 13))
+                hist_lbl.setStyleSheet(f"color: {TEXT_PRIMARY}; background: transparent;")
+                right_layout.addWidget(hist_lbl)
+
+                hist = _HistogramWidget(stat.first_fixation_histogram or [], color)
+                right_layout.addWidget(hist)
+                right.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+                row.addWidget(right, 2)
+                self._aoi_cards_layout.addWidget(wrapper)
         else:
             self._pie_header.hide()
             self._pie_container.hide()
@@ -685,18 +1048,18 @@ class RecordsListPage(QWidget):
         self._apply_filters()
 
         # ── ROI sync check ────────────────────────────────────────────────────
-        if (
-            self._test_dao is not None
-            and self._test is not None
-            and self._record_service.is_aoi_sync_needed(self._test.id, self._test.aoi)
-        ):
-            self._sync_btn.setEnabled(True)
-            self._sync_btn.setText("Синхронизировать зоны интереса")
-            self._sync_label.setText(
-                "Некоторые записи содержат устаревшие данные зон интереса — "
-                "зоны были добавлены или удалены после проведения тестов."
-            )
-            self._sync_banner.show()
+        if self._test_dao is not None and self._test is not None:
+            sync_needed = self._record_service.is_aoi_sync_needed(self._test.id, self._test.aoi)
+            if sync_needed or self._always_show_sync_aoi:
+                self._sync_btn.setEnabled(True)
+                self._sync_btn.setText("Синхронизировать зоны интереса")
+                self._sync_label.setText(
+                    "Некоторые записи содержат устаревшие данные зон интереса — "
+                    "зоны были добавлены или удалены после проведения тестов."
+                    if sync_needed else
+                    "Принудительная синхронизация зон интереса включена в настройках."
+                )
+                self._sync_banner.show()
 
     def _on_from_dt_changed(self) -> None:
         if not self._filter_from_active:
@@ -738,8 +1101,11 @@ class RecordsListPage(QWidget):
         hdr.setSectionResizeMode(total - 1, QHeaderView.ResizeMode.Stretch)
         self._table.setColumnWidth(0, 155)
         self._table.setColumnWidth(1, 120)
-        for i in range(n_roi):
-            self._table.setColumnWidth(2 + i, 100)
+        hdr_font = self._table.horizontalHeader().font()
+        fm = QFontMetrics(hdr_font)
+        _PAD = 48  # extra room so text is never clipped
+        for i, name in enumerate(self._roi_names):
+            self._table.setColumnWidth(2 + i, max(100, fm.horizontalAdvance(name) + _PAD))
 
     def _on_non_user_filter_changed(self) -> None:
         self._refresh_user_combo()

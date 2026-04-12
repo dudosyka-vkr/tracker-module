@@ -161,6 +161,16 @@ class Settings:
         self._save()
 
     @property
+    def always_show_sync_aoi(self) -> bool:
+        """Whether to always show the AOI sync button on the records list page."""
+        return self._data.get("always_show_sync_aoi", False)
+
+    @always_show_sync_aoi.setter
+    def always_show_sync_aoi(self, value: bool) -> None:
+        self._data["always_show_sync_aoi"] = value
+        self._save()
+
+    @property
     def smoothing_window_size(self) -> int:
         """Number of recent gaze predictions averaged in the sliding-window smoother."""
         return int(self._data.get("smoothing_window_size", 4))

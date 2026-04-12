@@ -15,6 +15,7 @@ class TestData:
     name: str
     image_filename: str
     aoi: list[dict] = field(default_factory=list)
+    author: str = ""
 
 
 class TestDao(ABC):

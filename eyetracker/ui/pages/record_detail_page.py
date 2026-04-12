@@ -20,6 +20,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from eyetracker.core.aoi_sequence_map import generate_aoi_sequence_map
+from eyetracker.core.roi import compute_tge
 from eyetracker.core.fixation_map import generate_all_fixations_map, generate_fixation_map
 from eyetracker.core.gaze_points_map import generate_gaze_points_map, generate_saccade_map
 from eyetracker.core.heatmap import generate_heatmap
@@ -43,6 +45,43 @@ from eyetracker.ui.theme import (
 
 _BADGE_W = 120
 _BADGE_H = 76
+
+
+
+
+class _HoverLabel(QLabel):
+    """QLabel that shows a custom tooltip popup on hover."""
+
+    def __init__(self, text: str, tooltip: str, parent: QWidget | None = None):
+        super().__init__(text, parent)
+        self._tooltip_text = tooltip
+        self._tooltip_popup: QLabel | None = None
+
+    def enterEvent(self, event) -> None:  # noqa: N802
+        popup = QLabel(self._tooltip_text)
+        popup.setWindowFlags(
+            Qt.WindowType.ToolTip
+        )
+        popup.setFont(QFont(FONT_FAMILY, 11))
+        popup.setStyleSheet(
+            f"color: {TEXT_PRIMARY};"
+            f" background-color: {BG_SIDEBAR};"
+            f" border: 1px solid {BORDER_COLOR};"
+            f" border-radius: 4px;"
+            f" padding: 4px 8px;"
+        )
+        popup.adjustSize()
+        pos = self.mapToGlobal(self.rect().bottomLeft())
+        popup.move(pos)
+        popup.show()
+        self._tooltip_popup = popup
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:  # noqa: N802
+        if self._tooltip_popup is not None:
+            self._tooltip_popup.close()
+            self._tooltip_popup = None
+        super().leaveEvent(event)
 
 
 class _FixationBadge(QWidget):
@@ -220,7 +259,7 @@ class RecordDetailPage(QWidget):
         self._content_widget = QWidget()
         self._content_widget.setStyleSheet("background: transparent;")
         self._content_layout = QVBoxLayout(self._content_widget)
-        self._content_layout.setContentsMargins(0, 0, 0, 0)
+        self._content_layout.setContentsMargins(0, 0, 16, 24)
         self._content_layout.setSpacing(0)
         self._scroll.setWidget(self._content_widget)
         self._layout.addWidget(self._scroll, stretch=1)
@@ -266,6 +305,9 @@ class RecordDetailPage(QWidget):
         if roi_widget is not None:
             self._content_layout.addWidget(roi_widget)
         self._content_layout.addWidget(self._build_heatmap_widget())
+        aoi_seq_widget = self._build_aoi_sequence_widget()
+        if aoi_seq_widget is not None:
+            self._content_layout.addWidget(aoi_seq_widget)
         self._content_layout.addWidget(self._build_gaze_points_widget())
         self._content_layout.addWidget(self._build_saccade_map_widget())
         self._content_layout.addWidget(self._build_fixation_list())
@@ -606,7 +648,118 @@ class RecordDetailPage(QWidget):
             hit_lbl.setStyleSheet(f"color: {hit_color}; background: transparent;")
             row_layout.addWidget(hit_lbl)
 
+            # First fixation time inside this AOI
+            aoi_first = roi.get("aoi_first_fixation")
+            aoi_fix_lbl = _HoverLabel(
+                f"⏱ {aoi_first} мс" if aoi_first is not None else "⏱ —",
+                tooltip="Время первой фиксации",
+            )
+            aoi_fix_lbl.setFont(QFont(FONT_FAMILY, 13))
+            aoi_fix_lbl.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent;")
+            row_layout.addWidget(aoi_fix_lbl)
+
+            # Revisits
+            revisits = roi.get("revisits", 0)
+            revisits_lbl = _HoverLabel(
+                f"↩ {revisits}",
+                tooltip="Количество \nповторных \nзаходов",
+            )
+            revisits_lbl.setFont(QFont(FONT_FAMILY, 13))
+            revisits_lbl.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent;")
+            row_layout.addWidget(revisits_lbl)
+
             vbox.addWidget(row)
+
+        return container
+
+    def _build_tge_widget(self) -> QWidget | None:
+        tge = self._record.metrics.tge
+        if tge is None:
+            tge = compute_tge(self._record.metrics.aoi_sequence)
+        if tge is None:
+            return None
+
+        tge_row = QWidget()
+        tge_row.setStyleSheet(f"""
+            QWidget {{
+                background-color: {BG_SIDEBAR};
+                border: 1px solid {BORDER_COLOR};
+                border-radius: {CORNER_RADIUS}px;
+            }}
+        """)
+        tge_row.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        tge_layout = QHBoxLayout(tge_row)
+        tge_layout.setContentsMargins(14, 10, 14, 10)
+        tge_layout.setSpacing(10)
+
+        tge_name = _HoverLabel(
+            "Энтропия переходов",
+            tooltip=(
+                "Transition Gaze Entropy — энтропия переходов между зонами.\n"
+                "Низкое значение: взгляд следует чёткому маршруту.\n"
+                "Высокое значение: переходы случайны, интерфейс запутан."
+            ),
+        )
+        tge_name.setFont(QFont(FONT_FAMILY, 13))
+        tge_name.setStyleSheet(f"color: {TEXT_PRIMARY}; background: transparent;")
+        tge_layout.addWidget(tge_name, stretch=1)
+
+        tge_val = QLabel(f"{tge:.4f}")
+        tge_val.setFont(QFont(FONT_FAMILY, 13, QFont.Weight.Bold))
+        tge_val.setStyleSheet(f"color: {TEXT_PRIMARY}; background: transparent;")
+        tge_layout.addWidget(tge_val)
+
+        return tge_row
+
+    def _build_aoi_sequence_widget(self) -> QWidget | None:
+        if self._record is None:
+            return None
+        aoi_sequence = self._record.metrics.aoi_sequence
+        if not aoi_sequence:
+            return None
+        rois = self._test_data.aoi if self._test_data is not None else []
+
+        container = QWidget()
+        container.setStyleSheet("background: transparent;")
+        vbox = QVBoxLayout(container)
+        vbox.setContentsMargins(0, 16, 0, 0)
+        vbox.setSpacing(8)
+
+        heading = QLabel("Переходы между зонами интереса")
+        heading.setFont(QFont(FONT_FAMILY, 16, QFont.Weight.Bold))
+        heading.setStyleSheet(f"color: {TEXT_PRIMARY}; background: transparent;")
+        vbox.addWidget(heading)
+
+        label = QLabel()
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        label.setFixedHeight(540)
+        label.setStyleSheet(
+            f"background-color: {BG_SIDEBAR}; border: 1px solid {BORDER_COLOR};"
+            f" border-radius: {CORNER_RADIUS}px; color: {TEXT_SECONDARY};"
+        )
+
+        image_path = self._resolve_image_path()
+        if image_path is None or not image_path.exists():
+            label.setText("Изображение не найдено")
+        else:
+            try:
+                rgb = generate_aoi_sequence_map(image_path, rois, aoi_sequence)
+                label.setPixmap(
+                    _rgb_array_to_pixmap(rgb).scaled(
+                        960, 540,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                )
+            except Exception:
+                label.setText("Ошибка генерации карты переходов")
+
+        vbox.addWidget(label)
+
+        tge_widget = self._build_tge_widget()
+        if tge_widget is not None:
+            vbox.addWidget(tge_widget)
 
         return container
 

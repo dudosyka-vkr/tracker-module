@@ -12,6 +12,9 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from PIL import Image, ImageDraw
+
+from eyetracker.core.aoi_sequence_map import _get_font
 
 
 def generate_gaze_points_map(
@@ -75,18 +78,17 @@ def generate_saccade_map(
 ) -> np.ndarray:
     """Overlay pre-computed saccade vectors on *image_path* and return the result as RGB.
 
-    Each saccade is drawn as a dashed vector following its gaze points
-    point-by-point, with an arrowhead from start to end and a duration label
-    at the midpoint of the vector.
+    Each saccade is drawn as a dashed path with a straight filled-triangle arrow
+    from start to end and a PIL circle-badge label at the midpoint.
 
     Args:
         image_path: Path to the source (stimulus) image.
         saccades: List of saccade dicts as stored in ``RecordMetrics.saccades``.
                   Each dict has ``"duration_ms"`` (float | None) and ``"points"``
                   (list of ``{"x", "y", "time_ms", "velocity"}``).
-        dot_radius: Radius of each punctir dot in pixels.
-        dash_len: Length of each drawn dash segment in pixels.
-        gap_len: Length of the gap between dash segments in pixels.
+        dot_radius: Unused — kept for API compatibility (value is now scale-derived).
+        dash_len: Unused — kept for API compatibility (value is now scale-derived).
+        gap_len: Unused — kept for API compatibility (value is now scale-derived).
 
     Returns:
         RGB ``uint8`` numpy array of shape ``(H, W, 3)``.
@@ -100,13 +102,21 @@ def generate_saccade_map(
     h, w = img_bgr.shape[:2]
     out = img_bgr.copy()
 
+    # All sizes scale with the shorter image dimension (baseline: 1000 px)
+    scale        = min(w, h) / 1000.0
+    s_dot_radius = max(2, int(4 * scale))
+    s_dash_len   = max(6, int(12 * scale))
+    s_gap_len    = max(4, int(7 * scale))
+    s_thickness  = max(1, int(6 * scale))
+    s_head_len   = max(8, int(44 * scale))
+    s_font_size  = max(10, int(56 * scale))
+    s_label_pad  = max(8, int(24 * scale))
+    s_label_bord = max(2, int(3 * scale))
+    head_angle   = math.pi / 5   # 36°
+
     vector_color = (0, 200, 255)
     dot_color    = (0, 220, 255)
-    label_bg     = (30, 30, 30)
-    label_fg     = (255, 255, 255)
-    font         = cv2.FONT_HERSHEY_SIMPLEX
-    font_scale   = 0.4
-    font_thick   = 1
+    font         = _get_font(s_font_size)
 
     for saccade in saccades:
         points = saccade.get("points", [])
@@ -118,39 +128,65 @@ def generate_saccade_map(
             for p in points
         ]
 
-        # Draw dashed segments between consecutive gaze points
-        for k in range(len(pts) - 1):
-            _draw_dashed_segment(out, pts[k], pts[k + 1], dot_color, dot_radius, dash_len, gap_len)
+        # Straight filled-triangle arrow from start → end
+        p_start, p_end = pts[0], pts[-1]
+        if p_start != p_end:
+            cv2.line(out, p_start, p_end, vector_color, s_thickness, cv2.LINE_AA)
+            dx = p_end[0] - p_start[0]
+            dy = p_end[1] - p_start[1]
+            dist = math.hypot(dx, dy)
+            tx, ty = dx / dist, dy / dist
+            a = (int(p_end[0] - s_head_len * (tx * math.cos(head_angle) - ty * math.sin(head_angle))),
+                 int(p_end[1] - s_head_len * (ty * math.cos(head_angle) + tx * math.sin(head_angle))))
+            b = (int(p_end[0] - s_head_len * (tx * math.cos(head_angle) + ty * math.sin(head_angle))),
+                 int(p_end[1] - s_head_len * (ty * math.cos(head_angle) - tx * math.sin(head_angle))))
+            cv2.fillPoly(out, [np.array([p_end, a, b], dtype=np.int32)], vector_color)
 
-        # Arrowhead from start → end to show direction
-        if pts[0] != pts[-1]:
-            cv2.arrowedLine(out, pts[0], pts[-1], vector_color, 2, cv2.LINE_AA, tipLength=0.07)
+        # Start / end marker dots
+        cv2.circle(out, p_start, s_dot_radius + 2, vector_color, -1, cv2.LINE_AA)
+        cv2.circle(out, p_end,   s_dot_radius + 2, vector_color, -1, cv2.LINE_AA)
 
-        # Start and end marker dots
-        cv2.circle(out, pts[0],  dot_radius + 1, vector_color, -1, cv2.LINE_AA)
-        cv2.circle(out, pts[-1], dot_radius + 1, vector_color, -1, cv2.LINE_AA)
-
-        # Duration label: midpoint of the straight start→end vector, raised above it
-        mx = (pts[0][0] + pts[-1][0]) // 2
-        my = (pts[0][1] + pts[-1][1]) // 2
+        # PIL circle-badge label at midpoint
+        mx = (p_start[0] + p_end[0]) // 2
+        my = (p_start[1] + p_end[1]) // 2
         duration_ms = saccade.get("duration_ms")
-        label = f"{duration_ms:.0f} ms" if duration_ms is not None else f"{len(points)} pts"
-
-        (tw, th), baseline = cv2.getTextSize(label, font, font_scale, font_thick)
-        pad = 3
-        offset_y = th + pad + 6
-        tx = mx - tw // 2
-        ty = my - offset_y
-        cv2.rectangle(
-            out,
-            (tx - pad, ty - th - pad),
-            (tx + tw + pad, ty + baseline + pad),
-            label_bg,
-            -1,
-        )
-        cv2.putText(out, label, (tx, ty), font, font_scale, label_fg, font_thick, cv2.LINE_AA)
+        label = f"{duration_ms:.0f}ms" if duration_ms is not None else f"{len(points)}pts"
+        _draw_saccade_label(out, label, mx, my, font, s_label_pad, s_label_bord)
 
     return cv2.cvtColor(out, cv2.COLOR_BGR2RGB)
+
+
+def _draw_saccade_label(
+    out: np.ndarray,
+    text: str,
+    mx: int,
+    my: int,
+    font,
+    pad: int,
+    border: int,
+) -> None:
+    """Draw a PIL rounded-rectangle badge with *text* centred on *(mx, my)*."""
+    pil_img = Image.fromarray(cv2.cvtColor(out, cv2.COLOR_BGR2RGB))
+    draw = ImageDraw.Draw(pil_img)
+    bbox = draw.textbbox((0, 0), text, font=font)
+    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    half_w = tw // 2 + pad
+    half_h = th // 2 + pad
+    corner_r = half_h  # fully rounded on short axis
+    draw.rounded_rectangle(
+        (mx - half_w, my - half_h, mx + half_w, my + half_h),
+        radius=corner_r,
+        fill=(20, 20, 20),
+        outline=(0, 200, 255),
+        width=border,
+    )
+    draw.text(
+        (mx - tw // 2 - bbox[0], my - th // 2 - bbox[1]),
+        text,
+        font=font,
+        fill=(255, 255, 255),
+    )
+    out[:] = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
 
 
 # ---------------------------------------------------------------------------

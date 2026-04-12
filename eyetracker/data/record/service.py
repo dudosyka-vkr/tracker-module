@@ -15,7 +15,11 @@ class RecordMetrics:
     first_fixation_time_ms: int | None = None
     saccades: list[dict] = field(default_factory=list)
     roi_metrics: list[dict] = field(default_factory=list)
-    # roi_metrics entries: {"name": str, "color": str, "hit": bool, "first_fixation_required": bool}
+    # roi_metrics entries: {"name": str, "color": str, "hit": bool, "first_fixation_required": bool, "aoi_first_fixation": int | None, "revisits": int}
+    aoi_sequence: list = field(default_factory=list)
+    # aoi_sequence: per-fixation AOI label (str name or null); same order as fixations
+    tge: float | None = None
+    # tge: Transition Gaze Entropy — conditional entropy of AOI-to-AOI transitions
 
 
 @dataclass
@@ -66,6 +70,17 @@ class RoiStat:
     hits: int
     total: int
     first_fixation_required: bool
+    first_fixation_histogram: list = field(default_factory=list)
+    # first_fixation_histogram: list of {"binStartMs": int, "count": int}, 500 ms bins
+
+
+@dataclass
+class AoiStatsResult:
+    """Full AOI stats response: per-AOI stats + session-level TGE histogram."""
+
+    aois: list[RoiStat] = field(default_factory=list)
+    tge_histogram: list = field(default_factory=list)
+    # tge_histogram: list of {"binStart": float, "count": int}, bin width = 0.1
 
 
 @dataclass
@@ -108,8 +123,8 @@ class RecordService(ABC):
         ...
 
     @abstractmethod
-    def get_aoi_stats(self, test_id: str) -> list[RoiStat]:
-        """Return aggregated AOI hit statistics for all records of the given test."""
+    def get_aoi_stats(self, test_id: str) -> AoiStatsResult:
+        """Return aggregated AOI hit statistics + TGE histogram for the given test."""
         ...
 
     @abstractmethod

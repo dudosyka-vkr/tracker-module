@@ -29,6 +29,7 @@ from PyQt6.QtWidgets import (
 )
 
 from eyetracker.core.monitor import format_screen_label, get_available_screens
+from eyetracker.data.http_client import ApiError
 from eyetracker.data.login import LoginService
 from eyetracker.data.record.service import RecordService
 from eyetracker.data.settings import Settings
@@ -69,6 +70,19 @@ _SIDEBAR_ITEMS = [
 ]
 
 _PUBLIC_ITEMS = {"overview", "take_test", "calibration"}
+
+
+def _login_error_message(exc: Exception, form_mode: str) -> str:
+    if isinstance(exc, ApiError):
+        if exc.status == 401:
+            return "Неверный логин или пароль"
+        if exc.status == 409:
+            return "Пользователь с таким логином уже существует"
+        if exc.status >= 500:
+            return "Ошибка сервера. Попробуйте позже"
+        return exc.message or str(exc)
+    action = "регистрации" if form_mode == "register" else "входа"
+    return f"Ошибка {action}. Проверьте подключение к сети"
 
 
 class HomeScreen(QWidget):
@@ -409,8 +423,7 @@ class HomeScreen(QWidget):
             self._toggle_form_btn.setText("Нет аккаунта? Зарегистрироваться")
             self._update_auth_state(True)
         except Exception as exc:
-            action = "регистрации" if self._form_mode == "register" else "входа"
-            self._login_error.setText(f"Ошибка {action}: {exc}")
+            self._login_error.setText(_login_error_message(exc, self._form_mode))
             self._login_error.show()
         finally:
             self._login_btn.setEnabled(True)
@@ -589,6 +602,11 @@ class HomeScreen(QWidget):
     def _refresh_dashboard(self) -> None:
         test_id = self._settings.last_opened_test_id
         test = self._test_dao.load(test_id) if test_id else None
+        authored_by_other = test is not None and test.author and test.author != self._current_username
+        if authored_by_other:
+            test = None
+
+        self._last_test_tile.setVisible(True)
 
         placeholder_style = f"""
             background-color: {BG_SIDEBAR};
@@ -1092,6 +1110,21 @@ class HomeScreen(QWidget):
         admin_vbox.addWidget(self._smoothing_window_spin)
         admin_vbox.addWidget(smoothing_desc)
 
+        self._always_show_sync_aoi_cb = QCheckBox("Всегда показывать кнопку синхронизации AOI")
+        self._always_show_sync_aoi_cb.setFont(QFont(FONT_FAMILY, 14))
+        self._always_show_sync_aoi_cb.setStyleSheet(_checkbox_style)
+        self._always_show_sync_aoi_cb.setChecked(self._settings.always_show_sync_aoi)
+        self._always_show_sync_aoi_cb.toggled.connect(self._on_always_show_sync_aoi_changed)
+
+        always_sync_desc = QLabel("Показывать кнопку «Синхронизировать зоны интереса» на странице записей теста даже если синхронизация не требуется")
+        always_sync_desc.setFont(QFont(FONT_FAMILY, 12))
+        always_sync_desc.setWordWrap(True)
+        always_sync_desc.setStyleSheet(f"color: {TEXT_SECONDARY}; background: transparent; padding-left: 26px;")
+
+        admin_vbox.addSpacing(16)
+        admin_vbox.addWidget(self._always_show_sync_aoi_cb)
+        admin_vbox.addWidget(always_sync_desc)
+
         self._use_api_cb = QCheckBox("Использовать удалённый сервер (API)")
         self._use_api_cb.setFont(QFont(FONT_FAMILY, 14))
         self._use_api_cb.setStyleSheet(_checkbox_style)
@@ -1196,6 +1229,9 @@ class HomeScreen(QWidget):
 
     def _on_smoothing_window_changed(self, size: int) -> None:
         self._settings.smoothing_window_size = size
+
+    def _on_always_show_sync_aoi_changed(self, checked: bool) -> None:
+        self._settings.always_show_sync_aoi = checked
 
     def _on_use_api_toggled(self, checked: bool) -> None:
         self._server_url_edit.setEnabled(checked)
@@ -1537,6 +1573,7 @@ class HomeScreen(QWidget):
             on_back=lambda tid=test_id: self._back_from_records_list(tid),
             test_dao=self._test_dao,
             test=test,
+            always_show_sync_aoi=self._settings.always_show_sync_aoi,
         )
         self._content_stack.addWidget(self._records_page)
         self._content_stack.setCurrentWidget(self._records_page)

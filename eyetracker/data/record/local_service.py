@@ -9,6 +9,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from eyetracker.data.record.service import (
+    AoiStatsResult,
     Record,
     RecordListResult,
     RecordMetrics,
@@ -21,6 +22,22 @@ from eyetracker.data.record.service import (
 logger = logging.getLogger(__name__)
 
 _DEFAULT_DIR = Path.home() / ".eyetracker" / "records"
+
+
+def _build_tge_histogram(values: list[float]) -> list[dict]:
+    if not values:
+        return []
+    bin_width = 0.1
+    max_val = max(values)
+    n_bins = int(max_val / bin_width) + 1
+    counts = [0] * n_bins
+    for v in values:
+        idx = min(int(v / bin_width), n_bins - 1)
+        counts[idx] += 1
+    return [
+        {"binStart": round(i * bin_width, 1), "count": counts[i]}
+        for i in range(n_bins)
+    ]
 
 
 class LocalRecordService(RecordService):
@@ -78,13 +95,16 @@ class LocalRecordService(RecordService):
             return None
         return self._read_record(path)
 
-    def get_aoi_stats(self, test_id: str) -> list[RoiStat]:
+    def get_aoi_stats(self, test_id: str) -> AoiStatsResult:
         result = self.query(RecordQuery(test_id=test_id, page_size=10_000))
         stats: dict[str, list] = {}  # name -> [hits, total, color, first_fixation_required]
+        tge_values: list[float] = []
         for summary in result.items:
             record = self.load(summary.id)
             if record is None:
                 continue
+            if record.metrics.tge is not None:
+                tge_values.append(record.metrics.tge)
             for roi in record.metrics.roi_metrics:
                 name = roi.get("name", "?")
                 if name not in stats:
@@ -92,10 +112,12 @@ class LocalRecordService(RecordService):
                 stats[name][1] += 1
                 if roi.get("hit"):
                     stats[name][0] += 1
-        return [
+        aois = [
             RoiStat(name=name, color=v[2], hits=v[0], total=v[1], first_fixation_required=v[3])
             for name, v in stats.items()
         ]
+        tge_histogram = _build_tge_histogram(tge_values)
+        return AoiStatsResult(aois=aois, tge_histogram=tge_histogram)
 
     def is_aoi_sync_needed(self, test_id: str, aoi: list[dict]) -> bool:
         current_names = {r["name"] for r in aoi}
@@ -174,6 +196,8 @@ class LocalRecordService(RecordService):
                 first_fixation_time_ms=m.get("first_fixation_time_ms"),
                 saccades=m.get("saccades", []),
                 roi_metrics=m.get("roi_metrics", []),
+                aoi_sequence=m.get("aoi_sequence", []),
+                tge=m.get("tge"),
             )
             return Record(
                 id=data["id"],

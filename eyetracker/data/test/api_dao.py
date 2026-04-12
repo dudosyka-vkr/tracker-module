@@ -91,4 +91,5 @@ def _parse_test(item: dict) -> TestData:
         name=item["name"],
         image_filename="image",
         aoi=item.get("aoi", []),
+        author=item.get("userLogin", ""),
     )

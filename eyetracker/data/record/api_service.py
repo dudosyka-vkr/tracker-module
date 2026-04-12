@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from eyetracker.data.http_client import ApiError, HttpClient
 from eyetracker.data.record.service import (
+    AoiStatsResult,
     Record,
     RecordListResult,
     RecordMetrics,
@@ -68,6 +69,8 @@ class ApiRecordService(RecordService):
             first_fixation_time_ms=m.get("firstFixationTimeMs"),
             saccades=m.get("saccades", []),
             roi_metrics=m.get("aoiMetrics", m.get("roiMetrics", [])),
+            aoi_sequence=m.get("aoiSequence", []),
+            tge=m.get("tge"),
         )
 
         return Record(
@@ -81,21 +84,27 @@ class ApiRecordService(RecordService):
             created_at=resp["createdAt"],
         )
 
-    def get_aoi_stats(self, test_id: str) -> list[RoiStat]:
+    def get_aoi_stats(self, test_id: str) -> AoiStatsResult:
         try:
             resp = self._client.get(f"/tests/{test_id}/aoi-stats")
         except Exception:
-            return []
-        return [
+            return AoiStatsResult()
+        aois = [
             RoiStat(
                 name=r["name"],
                 color=r.get("color", "#0a84ff"),
                 hits=r["hits"],
                 total=r["total"],
                 first_fixation_required=r.get("firstFixationRequired", False),
+                first_fixation_histogram=r.get("firstFixationHistogram", []),
             )
             for r in resp.get("aois", [])
         ]
+        tge_histogram = [
+            {"binStart": b["binStart"], "count": b["count"]}
+            for b in resp.get("tgeHistogram", [])
+        ]
+        return AoiStatsResult(aois=aois, tge_histogram=tge_histogram)
 
     def is_aoi_sync_needed(self, test_id: str, aoi: list[dict]) -> bool:
         try:
@@ -146,6 +155,8 @@ def _serialize_metrics(metrics: RecordMetrics) -> dict:
         "firstFixationTimeMs": metrics.first_fixation_time_ms,
         "saccades": metrics.saccades,
         "roiMetrics": metrics.roi_metrics,
+        "aoiSequence": metrics.aoi_sequence,
+        "tge": metrics.tge,
     }
 
 

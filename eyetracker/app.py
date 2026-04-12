@@ -13,7 +13,7 @@ from eyetracker.core.fixation_offline import detect_fixations_ivt
 from eyetracker.core.gaze_points_map import _compute_velocities
 from eyetracker.core.monitor import resolve_screen
 from eyetracker.core.pipeline import EyeTracker
-from eyetracker.core.roi import compute_roi_metrics
+from eyetracker.core.roi import compute_roi_metrics, compute_tge, fixation_aoi_sequence
 from eyetracker.core.saccade import detect_saccades
 from eyetracker.data.login import ApiLoginService, LocalLoginService
 from eyetracker.data.record import (
@@ -48,6 +48,13 @@ class App:
                 min-width: 60px;
             }
             QMessageBox QPushButton:hover { background-color: #4a4a4a; }
+            QToolTip {
+                background-color: #2c2c2e;
+                color: #ffffff;
+                border: 1px solid #48484a;
+                border-radius: 4px;
+                padding: 4px 8px;
+            }
         """)
         self._settings = Settings()
 
@@ -355,6 +362,8 @@ class App:
             for s in raw_saccades
         ]
         roi_metrics = compute_roi_metrics(self._pending_test.aoi, fixations)
+        aoi_seq = fixation_aoi_sequence(self._pending_test.aoi, fixations)
+        tge = compute_tge(aoi_seq)
 
         return Record(
             id=uuid.uuid4().hex,
@@ -369,6 +378,8 @@ class App:
                 first_fixation_time_ms=first_fix_time,
                 saccades=saccades,
                 roi_metrics=roi_metrics,
+                aoi_sequence=aoi_seq,
+                tge=tge,
             ),
             created_at=now,
         )
