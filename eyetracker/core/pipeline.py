@@ -434,9 +434,11 @@ class EyeTracker:
         self._regs = [RidgeWeightedReg()]
 
         self._cap: cv2.VideoCapture | None = None
+        self._camera_index: int = 0
         self._paused = True
         self._running = False
         self._loop_thread: threading.Thread | None = None
+        self._empty_frame_count: int = 0
 
         self._latest_eye_features: tuple[Eye, Eye] | None = None
         self._latest_gaze: dict | None = None
@@ -456,19 +458,25 @@ class EyeTracker:
         self._screen_height = height
         return self
 
+    def _open_capture(self, camera_index: int) -> cv2.VideoCapture | None:
+        if platform.system() == "Darwin":
+            cap = cv2.VideoCapture(camera_index, cv2.CAP_AVFOUNDATION)
+        else:
+            cap = cv2.VideoCapture(camera_index)
+        if not cap.isOpened():
+            return None
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.params.video_width)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.params.video_height)
+        return cap
+
     def begin(self, camera_index: int = 0) -> "EyeTracker":
         """Start webcam capture and the prediction loop."""
-        if platform.system() == "Darwin":
-            self._cap = cv2.VideoCapture(camera_index, cv2.CAP_AVFOUNDATION)
-        else:
-            self._cap = cv2.VideoCapture(camera_index)
+        self._camera_index = camera_index
+        self._cap = self._open_capture(camera_index)
 
-        if not self._cap.isOpened():
+        if not self._cap:
             logger.error("Could not open webcam at index %d", camera_index)
             return self
-
-        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.params.video_width)
-        self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.params.video_height)
 
         # Warmup: let the camera initialize and deliver first frames
         for _ in range(5):
@@ -583,9 +591,27 @@ class EyeTracker:
                 continue
 
             ret, frame = self._cap.read()
-            if not ret:
+            if not ret or frame is None:
                 time.sleep(0.01)
                 continue
+
+            # On macOS, if camera permission was just granted the capture returns
+            # black frames until the AVFoundation session is reopened. Track
+            # consecutive empty frames and reopen after the threshold — this
+            # handles the async permission dialog (user clicks OK after begin()).
+            if platform.system() == "Darwin" and not frame.any():
+                self._empty_frame_count += 1
+                if self._empty_frame_count >= 30:
+                    logger.info("Camera returning empty frames, reopening (permission granted?)")
+                    self._cap.release()
+                    time.sleep(0.5)
+                    new_cap = self._open_capture(self._camera_index)
+                    if new_cap:
+                        self._cap = new_cap
+                    self._empty_frame_count = 0
+                time.sleep(0.01)
+                continue
+            self._empty_frame_count = 0
 
             self._latest_frame = frame
 

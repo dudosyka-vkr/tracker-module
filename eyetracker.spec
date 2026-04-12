@@ -27,6 +27,8 @@ a = Analysis(
         (str(mediapipe_dir), "mediapipe"),
         # Pre-downloaded face landmarker model (if present)
         ("eyetracker/models", "eyetracker/models"),
+        # App icons and static assets
+        ("eyetracker/assets", "eyetracker/assets"),
     ],
     hiddenimports=[
         "mediapipe",
@@ -74,6 +76,7 @@ if is_mac:
         codesign_identity=None,
         entitlements_file=None,
         exclude_binaries=True,
+        icon="eyetracker/assets/icon.icns" if is_mac else "eyetracker/assets/icon.ico",
     )
 
     coll = COLLECT(
@@ -90,7 +93,7 @@ if is_mac:
     app = BUNDLE(
         coll,
         name="EyeTracker.app",
-        icon=None,
+        icon="eyetracker/assets/icon.icns",
         bundle_identifier="com.eyetracker.app",
         info_plist={
             "CFBundleName": "EyeTracker",
@@ -123,4 +126,5 @@ else:
         target_arch=None,
         codesign_identity=None,
         entitlements_file=None,
+        icon="eyetracker/assets/icon.ico",
     )

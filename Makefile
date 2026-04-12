@@ -4,7 +4,7 @@ CAMERA  ?=0
 VERBOSE ?=
 URL     ?=
 
-RUN_ARGS := --camera $(CAMERA)
+RUN_ARGS := --camera $(CAMERA) --dev
 ifneq ($(VERBOSE),)
 RUN_ARGS += --verbose
 endif

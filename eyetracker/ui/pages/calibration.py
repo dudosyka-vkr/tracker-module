@@ -138,6 +138,9 @@ class CalibrationScreen(QWidget):
         self._timer = QTimer()
         self._timer.timeout.connect(self.update)
 
+        # Guard: ignore all mouse input until start() completes
+        self._ready = False
+
     # ---- Lifecycle -----------------------------------------------------------
 
     def start(self):
@@ -159,8 +162,11 @@ class CalibrationScreen(QWidget):
         else:
             self._phase = self.PHASE_INSTRUCTIONS
 
+        self._ready = True
+
     def stop(self):
         """Called when leaving this screen."""
+        self._ready = False
         self._video_running = False
         self._timer.stop()
         self.wg.end()
@@ -295,6 +301,8 @@ class CalibrationScreen(QWidget):
     # ---- Click handling -----------------------------------------------------
 
     def _on_click(self, x: int, y: int):
+        if not self._ready:
+            return
         if self._phase == self.PHASE_INSTRUCTIONS:
             self._start_calibration()
         elif self._phase == self.PHASE_CALIBRATION:

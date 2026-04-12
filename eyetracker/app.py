@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import platform
 import sys
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 
-from PyQt6.QtCore import QTimer
+from PyQt6.QtCore import QObject, QTimer, pyqtSignal
+from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication, QMainWindow, QMessageBox, QStackedWidget
 
 from eyetracker.core.fixation_offline import detect_fixations_ivt
@@ -29,6 +32,72 @@ from eyetracker.ui.pages.home import HomeScreen
 from eyetracker.ui.pages.test_completion_screen import TestCompletionScreen
 from eyetracker.ui.pages.test_instructions_screen import TestInstructionsScreen
 from eyetracker.ui.pages.test_run_screen import TestRunScreen
+
+
+def _macos_camera_auth_status() -> int:
+    """Returns AVAuthorizationStatus via ctypes (no pyobjc needed).
+    0=not determined, 1=restricted, 2=denied, 3=authorized.
+    """
+    import ctypes
+    import ctypes.util
+    libobjc = ctypes.cdll.LoadLibrary(ctypes.util.find_library("objc"))
+    ctypes.cdll.LoadLibrary(
+        "/System/Library/Frameworks/AVFoundation.framework/AVFoundation"
+    )
+    libobjc.objc_getClass.restype = ctypes.c_void_p
+    libobjc.objc_getClass.argtypes = [ctypes.c_char_p]
+    libobjc.sel_registerName.restype = ctypes.c_void_p
+    libobjc.sel_registerName.argtypes = [ctypes.c_char_p]
+    # Build NSString @"vide" (AVMediaTypeVideo)
+    libobjc.objc_msgSend.restype = ctypes.c_void_p
+    libobjc.objc_msgSend.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_char_p]
+    ns_string = libobjc.objc_getClass(b"NSString")
+    sel_swus = libobjc.sel_registerName(b"stringWithUTF8String:")
+    media_type = libobjc.objc_msgSend(ns_string, sel_swus, b"vide")
+    # Call [AVCaptureDevice authorizationStatusForMediaType:]
+    libobjc.objc_msgSend.restype = ctypes.c_long
+    libobjc.objc_msgSend.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+    av_class = libobjc.objc_getClass(b"AVCaptureDevice")
+    sel_auth = libobjc.sel_registerName(b"authorizationStatusForMediaType:")
+    return int(libobjc.objc_msgSend(av_class, sel_auth, media_type))
+
+
+class _CameraPermissionChecker(QObject):
+    granted = pyqtSignal()
+    denied = pyqtSignal()
+
+    def check(self) -> None:
+        if platform.system() != "Darwin":
+            return
+        import threading
+        import cv2
+
+        try:
+            status = _macos_camera_auth_status()
+        except Exception:
+            return
+
+        if status == 3:  # already authorized
+            return
+        if status in (1, 2):  # restricted or denied
+            self.denied.emit()
+            return
+
+        # status == 0: not determined — open camera to trigger the system dialog,
+        # then wait in a background thread and emit the result.
+        def _request() -> None:
+            cap = cv2.VideoCapture(0, cv2.CAP_AVFOUNDATION)
+            cap.release()
+            try:
+                new_status = _macos_camera_auth_status()
+            except Exception:
+                new_status = 3
+            if new_status == 3:
+                self.granted.emit()
+            else:
+                self.denied.emit()
+
+        threading.Thread(target=_request, daemon=True).start()
 
 
 class App:
@@ -71,6 +140,11 @@ class App:
             self._login_service = LocalLoginService()
             self._record_service = LocalRecordService()
 
+        _icon_name = "icon.icns" if platform.system() == "Darwin" else "icon.ico"
+        _icon_path = Path(__file__).parent / "assets" / _icon_name
+        if _icon_path.exists():
+            self._qt_app.setWindowIcon(QIcon(str(_icon_path)))
+
         self._window = QMainWindow()
         self._window.setWindowTitle("EyeTracker")
 
@@ -105,9 +179,34 @@ class App:
     def run(self):
         self._stack.setCurrentWidget(self._home)
         self._move_to_target_screen()
+        QTimer.singleShot(0, self._check_camera_permission)
         if self._api_client is not None and self._settings.auth_token:
             QTimer.singleShot(0, self._check_token)
         self._qt_app.exec()
+
+    def _check_camera_permission(self) -> None:
+        self._permission_checker = _CameraPermissionChecker()
+        self._permission_checker.granted.connect(self._on_camera_permission_granted)
+        self._permission_checker.denied.connect(self._on_camera_permission_denied)
+        self._permission_checker.check()
+
+    def _on_camera_permission_granted(self) -> None:
+        msg = QMessageBox(self._window)
+        msg.setWindowTitle("Доступ к камере")
+        msg.setText("Доступ к камере получен. Перезапустите приложение.")
+        msg.exec()
+        self._qt_app.quit()
+
+    def _on_camera_permission_denied(self) -> None:
+        msg = QMessageBox(self._window)
+        msg.setWindowTitle("Доступ к камере")
+        msg.setText(
+            "Доступ к камере запрещён. Разрешите доступ в "
+            "Системные настройки → Конфиденциальность и безопасность → Камера, "
+            "затем перезапустите приложение."
+        )
+        msg.exec()
+        self._qt_app.quit()
 
     def _check_token(self) -> None:
         """Validate the stored token against /auth/me/role on startup."""
@@ -162,6 +261,8 @@ class App:
         self._stack.addWidget(self._calibration)
         self._stack.setCurrentWidget(self._calibration)
         self._calibration.start()
+        if platform.system() == "Darwin":
+            QTimer.singleShot(800, self._window.showFullScreen)
 
     def _go_to_test_run(self, test: TestData):
         """Navigate Home -> Calibration -> Test run."""
@@ -185,6 +286,8 @@ class App:
         self._stack.addWidget(self._calibration)
         self._stack.setCurrentWidget(self._calibration)
         self._calibration.start()
+        if platform.system() == "Darwin":
+            QTimer.singleShot(800, self._window.showFullScreen)
 
     def _on_calibration_for_test_done(self):
         """Called when calibration finishes during test run flow."""
