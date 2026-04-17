@@ -206,6 +206,10 @@ class AoiCanvas(QWidget):
         w, h = self._pixmap.width(), self._pixmap.height()
 
         # Draw existing AOIs
+        # Calculate font size based on image dimensions
+        base_font_size = max(10, min(w, h) // 25)
+        label_font = QFont(FONT_FAMILY, base_font_size, QFont.Weight.Bold)
+        
         for roi in self._aois:
             points = roi.get("points", [])
             if len(points) < 2:
@@ -224,6 +228,7 @@ class AoiCanvas(QWidget):
             if not label:
                 continue
             first_fixation = roi.get("first_fixation", False)
+            p.setFont(label_font)
             fm = p.fontMetrics()
             tw = fm.horizontalAdvance(label)
             th = fm.height()

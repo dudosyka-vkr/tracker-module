@@ -109,7 +109,7 @@ def generate_saccade_map(
     s_gap_len    = max(4, int(7 * scale))
     s_thickness  = max(1, int(6 * scale))
     s_head_len   = max(8, int(44 * scale))
-    s_font_size  = max(10, int(56 * scale))
+    s_font_size  = max(10, min(w, h) // 25)
     s_label_pad  = max(8, int(24 * scale))
     s_label_bord = max(2, int(3 * scale))
     head_angle   = math.pi / 5   # 36°

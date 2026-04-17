@@ -69,6 +69,9 @@ class TestRunScreen(QWidget):
 
         self._repaint_timer = QTimer()
         self._repaint_timer.timeout.connect(self.update)
+        
+        # Guard: ignore all mouse input until start() completes
+        self._ready = False
 
     @property
     def started_at(self) -> str | None:
@@ -88,6 +91,10 @@ class TestRunScreen(QWidget):
         return list(self._timed_gaze)
 
     def start(self) -> None:
+        # Block input during initialization
+        self._ready = False
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        
         self._started_at = datetime.now(timezone.utc).isoformat()
         self._screen_w = self.width()
         self._screen_h = self.height()
@@ -104,6 +111,12 @@ class TestRunScreen(QWidget):
         self._image_timer.start()
         self._repaint_timer.start(33)
         self.setFocus()
+        
+        # Flush pending events and enable input
+        from PyQt6.QtCore import QCoreApplication
+        QCoreApplication.processEvents()
+        self._ready = True
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
 
     def stop(self) -> None:
         self._image_timer.stop()
@@ -185,3 +198,9 @@ class TestRunScreen(QWidget):
             self._on_back()
         else:
             super().keyPressEvent(event)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        # Ignore all mouse input until start() completes
+        if not self._ready:
+            return
+        super().mousePressEvent(event)

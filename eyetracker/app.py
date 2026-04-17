@@ -274,6 +274,10 @@ class App:
 
         self._move_to_target_screen()
 
+        # Flush any pending events from window resize/move
+        from PyQt6.QtCore import QCoreApplication
+        QCoreApplication.processEvents()
+
         tracker = EyeTracker()
         tracker.params.data_timestep = self._settings.tracking_timestep_ms
         tracker.smoothing_window_size = self._settings.smoothing_window_size

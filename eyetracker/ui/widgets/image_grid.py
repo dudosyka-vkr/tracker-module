@@ -393,6 +393,11 @@ class ImagePreviewOverlay(QWidget):
                 self._delete_btn.setGeometry(x + color_w + gap + input_w + gap + save_w + gap + cancel_w + gap, bottom_y, delete_w, btn_h)
 
     def _draw_existing_rois(self, painter: QPainter, img_rect: QRect) -> None:
+        # Calculate font size based on image dimensions
+        base_font_size = max(10, min(img_rect.width(), img_rect.height()) // 25)
+        label_font = QFont(FONT_FAMILY, base_font_size, QFont.Weight.Bold)
+        painter.setFont(label_font)
+        
         for i, roi in enumerate(self._existing_rois):
             if len(roi.get("points", [])) < 2:
                 continue
@@ -620,14 +625,16 @@ class _DraggableTile(QWidget):
         painter.end()
 
     def _paint_badges(self, painter: QPainter) -> None:
-        badge_h = 22
+        # Calculate font size based on tile dimensions
+        base_font_size = max(8, min(self.width(), self.height()) // 20)
+        badge_h = max(18, self.height() // 8)
         badge_gap = 4
         margin_x = 6
         margin_y = 6
         pad_x = 8
-        box_s = 14  # size of the "1" square
+        box_s = badge_h - 4  # size of the "1" square
 
-        font = QFont(FONT_FAMILY, 9)
+        font = QFont(FONT_FAMILY, base_font_size)
         painter.setFont(font)
         fm = painter.fontMetrics()
 

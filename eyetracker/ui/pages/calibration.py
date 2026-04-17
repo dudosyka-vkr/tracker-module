@@ -145,6 +145,10 @@ class CalibrationScreen(QWidget):
 
     def start(self):
         """Called when navigating to this screen."""
+        # Block all input until initialization is complete
+        self._ready = False
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        
         self.wg.set_screen_size(self.width(), self.height())
         self.wg.begin()
         self.wg.set_gaze_listener(self._on_gaze)
@@ -159,10 +163,15 @@ class CalibrationScreen(QWidget):
             else:
                 self._phase = self.PHASE_GAZE
                 self._show_gaze_dot = True
+            self._ready = True
+            self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
         else:
             self._phase = self.PHASE_INSTRUCTIONS
-
-        self._ready = True
+            # Flush any pending mouse events from before screen switch
+            from PyQt6.QtCore import QCoreApplication
+            QCoreApplication.processEvents()
+            self._ready = True
+            self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
 
     def stop(self):
         """Called when leaving this screen."""

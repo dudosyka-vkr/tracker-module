@@ -64,7 +64,7 @@ def generate_aoi_sequence_map(
     # Scale all drawing sizes relative to the image's shorter dimension.
     # Baseline: constants were tuned at 1000 px short side.
     scale = min(w, h) / 1000.0
-    params = _DrawParams(scale)
+    params = _DrawParams(scale, min(w, h))
 
     # Extract ordered transitions from the sequence
     transitions = _build_transitions(aoi_sequence)
@@ -144,7 +144,7 @@ def _get_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
         except OSError:
             pass
     if font is None:
-        font = ImageFont.load_default()
+        font = ImageFont.load_default(size)
     _font_cache[size] = font
     return font
 
@@ -152,13 +152,13 @@ def _get_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
 class _DrawParams:
     """All drawing sizes derived from image scale (baseline: 1000 px short side)."""
 
-    def __init__(self, scale: float) -> None:
+    def __init__(self, scale: float, minWH: int) -> None:
         self.centroid_offset = int(30 * scale)
         self.curve_bend_base = int(100 * scale)
         self.curve_bend_step = int(80 * scale)
         self.arrow_thickness = max(1, int(6 * scale))
         self.head_len        = max(8, int(44 * scale))
-        self.font_size       = max(10, int(56 * scale))
+        self.font_size       = max(10, int(minWH // 25))
         self.label_pad       = max(8, int(24 * scale))
         self.label_border    = max(2, int(3 * scale))
         self.centroid_r      = max(4, int(7 * scale))

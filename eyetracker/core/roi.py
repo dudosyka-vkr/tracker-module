@@ -183,25 +183,6 @@ def compute_tge(aoi_sequence: list[str | None]) -> float | None:
 _FILL_ALPHA = 0.25
 _LABEL_BG_ALPHA = 0.7
 _PAD = 4
-_FONT_SIZE = 42
-
-
-def _get_pil_font() -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    try:
-        # Try common system fonts that support Cyrillic
-        for name in ("Arial.ttf", "DejaVuSans.ttf", "LiberationSans-Regular.ttf",
-                     "/System/Library/Fonts/Helvetica.ttc",
-                     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"):
-            try:
-                return ImageFont.truetype(name, _FONT_SIZE)
-            except OSError:
-                continue
-    except Exception:
-        pass
-    return ImageFont.load_default()
-
-
-_PIL_FONT = _get_pil_font()
 
 
 def overlay_rois(rgb: np.ndarray, rois: list[dict]) -> np.ndarray:
@@ -256,9 +237,23 @@ def overlay_rois(rgb: np.ndarray, rois: list[dict]) -> np.ndarray:
         if name:
             cx = int(np.mean([p["x"] for p in points_n]) * w)
             cy = int(np.mean([p["y"] for p in points_n]) * h)
+            
+            # Calculate font size based on image dimensions
+            base_font_size = max(10, min(w, h) // 25)
+            
             pil_img = Image.fromarray(cv2.cvtColor(out, cv2.COLOR_BGR2RGB))
             draw = ImageDraw.Draw(pil_img)
-            bbox = draw.textbbox((0, 0), name, font=_PIL_FONT)
+            
+            # Try to load a TrueType font, fallback to default if not available
+            try:
+                label_font = ImageFont.truetype("arial.ttf", base_font_size)
+            except (IOError, OSError):
+                try:
+                    label_font = ImageFont.truetype("DejaVuSans.ttf", base_font_size)
+                except (IOError, OSError):
+                    label_font = ImageFont.load_default()
+            
+            bbox = draw.textbbox((0, 0), name, font=label_font)
             tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
             tx = max(_PAD, min(w - tw - _PAD, cx - tw // 2))
             ty = max(_PAD, min(h - th - _PAD, cy - th // 2))
@@ -266,7 +261,7 @@ def overlay_rois(rgb: np.ndarray, rois: list[dict]) -> np.ndarray:
                 (tx - _PAD, ty - _PAD, tx + tw + _PAD, ty + th + _PAD),
                 fill=(20, 20, 20, int(255 * _LABEL_BG_ALPHA)),
             )
-            draw.text((tx, ty), name, font=_PIL_FONT, fill=(255, 255, 255))
+            draw.text((tx, ty), name, font=label_font, fill=(255, 255, 255))
             out = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
 
     return cv2.cvtColor(out, cv2.COLOR_BGR2RGB)
